@@ -47,6 +47,33 @@ Phase 1 behavior:
 - Shopify auth still uses the existing Shopify React Router helpers and Prisma session adapter.
 - `/health` and `/ready` provide liveness and dependency readiness without exposing secrets.
 
+## Phase 2 Queue And Worker Architecture
+
+```mermaid
+flowchart TD
+  Merchant[Authenticated merchant request] --> Web[React Router web process]
+  Web --> Tx[Prisma transaction]
+  Tx --> DB[(PostgreSQL OutboxEvent)]
+  Worker[Worker process] --> Dispatcher[Outbox dispatcher loop]
+  Dispatcher --> DB
+  Dispatcher --> Redis[(Redis)]
+  Redis --> Maintenance[maintenance queue]
+  Redis --> OrderWrite[order-write queue]
+  Redis --> CatalogSync[catalog-sync queue]
+  Maintenance --> Diagnostic[phase2 diagnostic processor]
+  Diagnostic --> DB
+```
+
+Phase 2 behavior:
+
+- The web process can create durable `OutboxEvent` rows inside PostgreSQL transactions.
+- The separate worker process owns the outbox dispatcher and BullMQ workers.
+- The dispatcher publishes unpublished outbox rows to deterministic BullMQ job IDs and marks rows published only after queue publication succeeds.
+- Redis outages leave unpublished database events behind for later retry.
+- Duplicate publication is harmless because the same outbox event maps to the same BullMQ job ID and the database update is conditional on `publishedAt` still being null.
+- The maintenance queue contains a harmless `phase2.diagnostic` processor that reloads the outbox event from PostgreSQL and logs safe operational metadata.
+- The `order-write` and `catalog-sync` queues exist, but their real processors are intentionally deferred to later phases.
+
 ## Target Architecture
 
 ```mermaid

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted. Phase 1 added schema foundation for idempotent imports, order intents, webhook receipts, dead-letter records, and outbox events. Outbox dispatching and queue publication remain Phase 2 work.
+Accepted. Phase 1 added schema foundation for idempotent imports, order intents, webhook receipts, dead-letter records, and outbox events. Phase 2 added outbox dispatching and deterministic queue publication.
 
 ## Context
 

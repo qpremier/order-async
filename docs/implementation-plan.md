@@ -2,7 +2,9 @@
 
 Phase 0 audit completed for the existing Shopify React Router app. This phase is documentation-only: no application behavior, schema, dependency, package-lock, or runtime configuration changes are included.
 
-Phase 1 establishes the PostgreSQL foundation, environment validation, local Postgres/Redis Compose services, and health/readiness checks. It intentionally does not implement BullMQ queues, a worker process, CSV ingestion, catalog synchronization, Shopify order creation, or dead-letter replay behavior.
+Phase 1 established the PostgreSQL foundation, environment validation, local Postgres/Redis Compose services, and health/readiness checks.
+
+Phase 2 adds BullMQ queue infrastructure, the separate worker process, transactional outbox dispatching, and a harmless diagnostic path. It intentionally does not implement catalog synchronization, CSV ingestion, Shopify order creation, rate limiting, or dead-letter replay behavior.
 
 ## Current Baseline
 
@@ -150,15 +152,15 @@ Migration risks:
 
 ## Worker Build Approach
 
-Phase 2 should add a separate worker without rewriting the web app:
+Phase 2 adds a separate worker without rewriting the web app:
 
 - Keep the React Router web process built with `react-router build`.
 - Add TypeScript worker modules under `worker/` or an equivalent server-only directory.
-- Add a dedicated `tsconfig.worker.json` that compiles worker code for Node.js and excludes browser-only React routes.
-- Emit worker build output to a deterministic directory such as `build/worker`.
-- Add scripts for `worker:dev`, `worker:build`, and `worker:start`.
-- Use one reusable Docker image with separate service commands for `web` and `worker`.
-- Ensure both processes run `prisma migrate deploy` only through a controlled startup/migration step, not racing from every worker replica.
+- Use `tsconfig.worker.json` to compile worker code for Node.js and exclude browser-only React routes.
+- Emit worker build output to `build/worker`.
+- Use `worker:dev`, `worker:build`, and `worker:start` scripts.
+- Use one reusable Docker image with separate Compose service commands for `web` and `worker`.
+- Use the Compose `migrate` service as the controlled migration step before web and worker start.
 
 Workers should obtain Shopify Admin access by reloading trusted shop state from PostgreSQL and calling the exported `unauthenticated.admin(shop)` helper. Queue payloads must contain internal IDs and operational metadata only, never Shopify access tokens or raw customer data.
 
@@ -188,6 +190,37 @@ Phase 1 limitations:
 - Catalog sync, CSV import, and order creation behavior remain future phases.
 - The Postgres-backed session-storage smoke test requires a reachable PostgreSQL database and skips automatically when `DATABASE_URL` is not provided.
 
+## Phase 2 Implementation Notes
+
+Completed queue and outbox changes:
+
+- Added BullMQ and a shared Redis connection helper for queues and workers.
+- Added the `order-write`, `catalog-sync`, and `maintenance` queues.
+- Added queue job descriptors that map known outbox event types to queues, job names, priorities, and deterministic BullMQ job IDs.
+- Used `__` as the deterministic job ID separator because BullMQ 6 rejects most custom job IDs containing `:`.
+- Added transactional outbox helper functions that create `OutboxEvent` rows inside caller-owned Prisma transactions.
+- Added an outbox dispatcher that reads unpublished events, publishes to BullMQ, and marks events published only after queue publication succeeds.
+- Kept duplicate publication safe through deterministic job IDs and conditional `publishedAt: null` database updates.
+- Left unpublished outbox events in PostgreSQL when Redis publication fails, with `attemptCount` and a sanitized `lastPublishError` recorded for later retry.
+- Added a separate TypeScript worker process with graceful SIGTERM/SIGINT shutdown.
+- Added a harmless `phase2.diagnostic` flow through `POST /app/phase2-diagnostic`.
+- Added maintenance worker handling for the diagnostic job that reloads the outbox event from PostgreSQL and logs safe operational metadata only.
+- Added Docker Compose `migrate`, `web`, and `worker` services under the `app` profile.
+
+Phase 2 dependency additions:
+
+- Runtime: `bullmq`.
+- Development: `tsx`.
+
+Phase 2 limitations:
+
+- Order-write and catalog-sync workers intentionally fail unsupported jobs until their future phase processors exist.
+- The diagnostic worker is read-only; real business-state transitions begin in later phases.
+- There is no database-level outbox claim column yet. Phase 2 relies on deterministic BullMQ job IDs, conditional publish marking, bounded job retention, and idempotent workers.
+- Catalog cache, Shopify cursor pagination, product webhooks, and manual catalog sync remain Phase 3 work.
+- CSV import and merchant-facing import UI remain Phase 4 work.
+- Shopify order creation, rate limiting, and reconciliation remain Phase 5 work.
+
 ## Phased Roadmap
 
 Phase 1 - PostgreSQL foundation:
@@ -200,9 +233,7 @@ Phase 1 - PostgreSQL foundation:
 
 Phase 2 - Queue, worker, and outbox:
 
-- Add BullMQ/Redis connection management.
-- Add web-to-database-to-outbox-to-queue-to-worker diagnostic flow.
-- Implement deterministic job IDs, duplicate-safe publication, and graceful shutdown.
+- Completed in Phase 2: BullMQ/Redis connection management, separate worker process, outbox dispatcher, deterministic job IDs, duplicate-safe publication, graceful shutdown, and the web-to-database-to-outbox-to-queue-to-worker diagnostic flow.
 
 Phase 3 - Catalog cache and pagination:
 

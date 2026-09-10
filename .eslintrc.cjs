@@ -87,6 +87,7 @@ module.exports = {
         "**/*.server.{js,ts}",
         "**/*.test.{js,jsx,ts,tsx}",
         "tests/**/*.{js,ts}",
+        "worker/**/*.ts",
       ],
       env: {
         node: true,

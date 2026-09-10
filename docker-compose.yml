@@ -1,5 +1,26 @@
 name: orderrelay
 
+x-app-environment: &app-environment
+  NODE_ENV: production
+  DATABASE_URL: ${WEB_DATABASE_URL:-postgresql://orderrelay:orderrelay@postgres:5432/orderrelay_development?schema=public}
+  REDIS_URL: ${WEB_REDIS_URL:-redis://redis:6379}
+  SHOPIFY_API_KEY: ${SHOPIFY_API_KEY:-}
+  SHOPIFY_API_SECRET: ${SHOPIFY_API_SECRET:-}
+  SHOPIFY_APP_URL: ${SHOPIFY_APP_URL:-}
+  SCOPES: ${SCOPES:-write_products,write_metaobjects,write_metaobject_definitions}
+  SHOP_CUSTOM_DOMAIN: ${SHOP_CUSTOM_DOMAIN:-}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  ORDER_WORKER_CONCURRENCY: ${ORDER_WORKER_CONCURRENCY:-5}
+  CATALOG_WORKER_CONCURRENCY: ${CATALOG_WORKER_CONCURRENCY:-2}
+  CATALOG_SYNC_PAGE_SIZE: ${CATALOG_SYNC_PAGE_SIZE:-100}
+  CATALOG_STALE_AFTER_MINUTES: ${CATALOG_STALE_AFTER_MINUTES:-60}
+  IMPORT_MAX_BYTES: ${IMPORT_MAX_BYTES:-5242880}
+  IMPORT_MAX_ROWS: ${IMPORT_MAX_ROWS:-10000}
+  JOB_MAX_ATTEMPTS: ${JOB_MAX_ATTEMPTS:-5}
+  RATE_LIMIT_SAFETY_MARGIN: ${RATE_LIMIT_SAFETY_MARGIN:-0.8}
+  OUTBOX_POLL_INTERVAL_MS: ${OUTBOX_POLL_INTERVAL_MS:-2000}
+  OUTBOX_BATCH_SIZE: ${OUTBOX_BATCH_SIZE:-50}
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -30,37 +51,43 @@ services:
       timeout: 5s
       retries: 10
 
-  web:
+  migrate:
     profiles: ["app"]
     build: .
     depends_on:
       postgres:
         condition: service_healthy
+    environment:
+      <<: *app-environment
+    command: ["npm", "run", "migrate:deploy"]
+    restart: "no"
+
+  web:
+    profiles: ["app"]
+    build: .
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     environment:
-      NODE_ENV: production
+      <<: *app-environment
       PORT: 3000
-      DATABASE_URL: ${WEB_DATABASE_URL:-postgresql://orderrelay:orderrelay@postgres:5432/orderrelay_development?schema=public}
-      REDIS_URL: ${WEB_REDIS_URL:-redis://redis:6379}
-      SHOPIFY_API_KEY: ${SHOPIFY_API_KEY:-}
-      SHOPIFY_API_SECRET: ${SHOPIFY_API_SECRET:-}
-      SHOPIFY_APP_URL: ${SHOPIFY_APP_URL:-}
-      SCOPES: ${SCOPES:-write_products,write_metaobjects,write_metaobject_definitions}
-      SHOP_CUSTOM_DOMAIN: ${SHOP_CUSTOM_DOMAIN:-}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
-      ORDER_WORKER_CONCURRENCY: ${ORDER_WORKER_CONCURRENCY:-5}
-      CATALOG_WORKER_CONCURRENCY: ${CATALOG_WORKER_CONCURRENCY:-2}
-      CATALOG_SYNC_PAGE_SIZE: ${CATALOG_SYNC_PAGE_SIZE:-100}
-      CATALOG_STALE_AFTER_MINUTES: ${CATALOG_STALE_AFTER_MINUTES:-60}
-      IMPORT_MAX_BYTES: ${IMPORT_MAX_BYTES:-5242880}
-      IMPORT_MAX_ROWS: ${IMPORT_MAX_ROWS:-10000}
-      JOB_MAX_ATTEMPTS: ${JOB_MAX_ATTEMPTS:-5}
-      RATE_LIMIT_SAFETY_MARGIN: ${RATE_LIMIT_SAFETY_MARGIN:-0.8}
-      OUTBOX_POLL_INTERVAL_MS: ${OUTBOX_POLL_INTERVAL_MS:-2000}
-      OUTBOX_BATCH_SIZE: ${OUTBOX_BATCH_SIZE:-50}
+    command: ["npm", "run", "start"]
     ports:
       - "${PORT:-3000}:3000"
+
+  worker:
+    profiles: ["app"]
+    build: .
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    environment:
+      <<: *app-environment
+    command: ["npm", "run", "worker:start"]
 
 volumes:
   postgres-data:

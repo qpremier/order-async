@@ -2,16 +2,16 @@
 
 OrderRelay is a Shopify embedded app for reliable external order imports. The app is being evolved incrementally from the Shopify React Router template.
 
-Phase 1 establishes the PostgreSQL foundation only. CSV import, catalog sync behavior, BullMQ workers, order creation, and dead-letter replay are planned for later phases.
+Phase 2 adds the BullMQ worker and transactional outbox foundation. CSV import, catalog sync behavior, Shopify order creation, and dead-letter replay are planned for later phases.
 
 ## Stack
 
 - React Router 7 and React 18
 - Shopify App Bridge and Shopify React Router authentication helpers
 - Prisma with PostgreSQL
-- Redis configured for future BullMQ queues
+- Redis-backed BullMQ queues
 - Docker and Docker Compose for local infrastructure
-- Vitest for foundation tests
+- Vitest for foundation and queue/outbox tests
 
 ## Local Setup
 
@@ -47,12 +47,21 @@ Run the Shopify development server:
 npm run dev
 ```
 
+Run the worker in a separate terminal:
+
+```sh
+npm run worker:dev
+```
+
 ## Useful Commands
 
 ```sh
 npm run prisma:generate
 npm run migrate:deploy
 npm run migrate:dev
+npm run worker:dev
+npm run worker:build
+npm run worker:start
 npm run lint
 npm run typecheck
 npm test
@@ -65,6 +74,12 @@ npm run build
 - `GET /ready` validates required environment, PostgreSQL connectivity, and Redis connectivity.
 
 Health responses never include secrets or raw connection strings.
+
+## Phase 2 Diagnostic Flow
+
+The authenticated `POST /app/phase2-diagnostic` route creates a harmless `phase2.diagnostic` `OutboxEvent` in PostgreSQL. The worker-side dispatcher publishes it to the BullMQ `maintenance` queue with a deterministic job ID, and the maintenance worker verifies the event still exists before logging a safe handled message.
+
+The diagnostic payload contains operational IDs only. It does not call Shopify and does not include tokens, customer data, or raw import data.
 
 ## Docker Compose
 
@@ -80,7 +95,7 @@ To run the web container as well, provide Shopify credentials in the environment
 docker compose --profile app up --build
 ```
 
-No worker service is included yet. BullMQ and the separate worker process begin in Phase 2.
+The app profile includes a one-shot `migrate` service, plus separate `web` and `worker` services built from the same image.
 
 ## Documentation
 

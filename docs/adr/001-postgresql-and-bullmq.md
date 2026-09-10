@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted. PostgreSQL foundation and Redis Compose configuration were implemented in Phase 1. BullMQ queues and workers remain Phase 2 work.
+Accepted. PostgreSQL foundation and Redis Compose configuration were implemented in Phase 1. BullMQ queues and the separate worker process were implemented in Phase 2.
 
 ## Context
 
