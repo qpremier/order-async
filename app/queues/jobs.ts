@@ -81,7 +81,7 @@ const EVENT_ROUTING = {
     queueName: QUEUE_NAMES.catalogSync,
     jobName: JOB_NAMES.catalogRefreshProduct,
     jobIdPrefix: "catalog-refresh-product",
-    dedupeSource: "aggregateId",
+    dedupeSource: "eventId",
     priority: 5,
   },
   [OUTBOX_EVENT_TYPES.catalogReconcile]: {

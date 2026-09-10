@@ -2,7 +2,7 @@
 
 OrderRelay is a Shopify embedded app for reliable external order imports. The app is being evolved incrementally from the Shopify React Router template.
 
-Phase 2 adds the BullMQ worker and transactional outbox foundation. CSV import, catalog sync behavior, Shopify order creation, and dead-letter replay are planned for later phases.
+Phase 3 adds the local catalog cache, Shopify cursor pagination, manual catalog sync, product webhook ingestion, and local keyset pagination. CSV import, Shopify order creation, and dead-letter replay are planned for later phases.
 
 ## Stack
 
@@ -74,6 +74,14 @@ npm run build
 - `GET /ready` validates required environment, PostgreSQL connectivity, and Redis connectivity.
 
 Health responses never include secrets or raw connection strings.
+
+## Catalog Cache
+
+The app dashboard shows catalog cache freshness, active cached variants, ambiguous SKU counts, and a cursor-paginated list of cached variants. The `Sync catalog` action creates a durable `CatalogSyncRun` and `catalog.bootstrap` outbox event; the worker performs Shopify Admin GraphQL pagination asynchronously.
+
+Product create, update, and delete webhooks are authenticated, deduplicated in PostgreSQL, converted into catalog refresh outbox events, and returned quickly. Webhook routes do not run Shopify GraphQL calls inline.
+
+The catalog query requires the `read_products` scope.
 
 ## Phase 2 Diagnostic Flow
 

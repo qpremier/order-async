@@ -18,10 +18,13 @@
   "include": [
     "worker/**/*.ts",
     "app/db.server.js",
+    "app/shopify.server.js",
     "app/queues/**/*.ts",
+    "app/services/catalog/**/*.ts",
     "app/services/diagnostics/**/*.ts",
     "app/services/logging/**/*.ts",
     "app/services/outbox/**/*.ts",
+    "app/services/pagination/**/*.ts",
     "app/services/security/environment.server.ts"
   ],
   "exclude": ["**/*.test.ts", "**/*.test.tsx", "node_modules"]

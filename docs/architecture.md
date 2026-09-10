@@ -74,6 +74,34 @@ Phase 2 behavior:
 - The maintenance queue contains a harmless `phase2.diagnostic` processor that reloads the outbox event from PostgreSQL and logs safe operational metadata.
 - The `order-write` and `catalog-sync` queues exist, but their real processors are intentionally deferred to later phases.
 
+## Phase 3 Catalog Cache Architecture
+
+```mermaid
+flowchart TD
+  Merchant[Merchant dashboard] --> Web[Manual sync action]
+  Web --> DB[(PostgreSQL CatalogSyncRun + OutboxEvent)]
+  ProductWebhooks[Product webhooks] --> WebhookRoutes[Fast webhook routes]
+  WebhookRoutes --> Receipts[(WebhookReceipt)]
+  WebhookRoutes --> DB
+  Worker[Worker process] --> Dispatcher[Outbox dispatcher]
+  Dispatcher --> Redis[(Redis catalog-sync queue)]
+  Redis --> CatalogWorker[Catalog processor]
+  CatalogWorker --> Shopify[Shopify Admin GraphQL productVariants]
+  CatalogWorker --> Cache[(CatalogVariant cache)]
+```
+
+Phase 3 behavior:
+
+- The dashboard reads cache status, stale age, ambiguous SKU counts, and recent variants from PostgreSQL.
+- Manual sync creates or reuses a running `CatalogSyncRun` and queues `catalog.bootstrap` through the transactional outbox.
+- The catalog worker uses Shopify Admin GraphQL `productVariants(first, after)` pagination and saves a checkpoint after each processed page.
+- A restarted or retried sync resumes from `CatalogSyncRun.lastProcessedCursor`.
+- A completed full sync marks variants not seen in the successful run as deleted. Failed syncs preserve the previous active cache and mark the shop stale or failed.
+- Product create/update/delete webhook routes authenticate and deduplicate deliveries, persist a `WebhookReceipt`, enqueue a targeted product refresh, and return without calling Shopify.
+- Duplicate SKUs are stored as separate `CatalogVariant` rows and reported as ambiguous by SKU resolution.
+- Local catalog lists use opaque keyset cursors instead of large offset queries.
+- The worker includes a reconciliation scheduler that periodically inserts sync outbox work for active shops with stale, failed, missing, or never-synced cache state.
+
 ## Target Architecture
 
 ```mermaid

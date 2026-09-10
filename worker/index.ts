@@ -9,6 +9,7 @@ import {
   OutboxDispatcher,
 } from "../app/services/outbox/dispatcher.server.js";
 import { getEnvironment } from "../app/services/security/environment.server.js";
+import { CatalogReconciliationScheduler } from "./catalog-reconciliation-scheduler.js";
 import { createQueueWorkers } from "./queue-workers.js";
 
 async function main() {
@@ -28,6 +29,7 @@ async function main() {
     prisma: db,
     orderConcurrency: environment.ORDER_WORKER_CONCURRENCY,
     catalogConcurrency: environment.CATALOG_WORKER_CONCURRENCY,
+    catalogPageSize: environment.CATALOG_SYNC_PAGE_SIZE,
     logger,
   });
   const dispatcher = new OutboxDispatcher({
@@ -35,6 +37,11 @@ async function main() {
     publisher: new BullMqOutboxPublisher(queues),
     batchSize: environment.OUTBOX_BATCH_SIZE,
     pollIntervalMs: environment.OUTBOX_POLL_INTERVAL_MS,
+    logger,
+  });
+  const reconciliationScheduler = new CatalogReconciliationScheduler({
+    prisma: db,
+    staleAfterMinutes: environment.CATALOG_STALE_AFTER_MINUTES,
     logger,
   });
 
@@ -50,6 +57,7 @@ async function main() {
       signal,
     });
 
+    reconciliationScheduler.stop();
     await dispatcher.stop();
     await Promise.all(workers.map((worker) => worker.close()));
     await queues.close();
@@ -71,6 +79,7 @@ async function main() {
   });
 
   void dispatcher.start();
+  reconciliationScheduler.start();
 
   logger.info("worker.started", {
     operationName: "worker.start",

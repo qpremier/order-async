@@ -8,6 +8,7 @@ import {
   sanitizeErrorMessage,
   type Logger,
 } from "../app/services/logging/logger.server.js";
+import { processCatalogJob } from "./processors/catalog.processor.js";
 import { processMaintenanceJob } from "./processors/maintenance.processor.js";
 import { processUnsupportedPhase2Job } from "./processors/unsupported.processor.js";
 
@@ -16,6 +17,7 @@ export interface QueueWorkerOptions {
   prisma: PrismaClient;
   orderConcurrency: number;
   catalogConcurrency: number;
+  catalogPageSize?: number;
   prefix?: string;
   logger?: Logger;
 }
@@ -40,7 +42,11 @@ export function createQueueWorkers(options: QueueWorkerOptions) {
       prefix: options.prefix,
       logger,
       processor: (job) =>
-        processUnsupportedPhase2Job(job, QUEUE_NAMES.catalogSync),
+        processCatalogJob(job, {
+          prisma: options.prisma,
+          pageSize: options.catalogPageSize ?? 100,
+          logger,
+        }),
     }),
     createWorker({
       queueName: QUEUE_NAMES.maintenance,

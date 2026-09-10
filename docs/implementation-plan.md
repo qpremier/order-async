@@ -212,14 +212,42 @@ Phase 2 dependency additions:
 - Runtime: `bullmq`.
 - Development: `tsx`.
 
-Phase 2 limitations:
+Phase 2 limitations before Phase 3:
 
-- Order-write and catalog-sync workers intentionally fail unsupported jobs until their future phase processors exist.
+- Order-write and catalog-sync workers intentionally failed unsupported jobs until their future phase processors existed. Phase 3 replaced the catalog-sync placeholder with catalog processors; order-write remains future Phase 5 work.
 - The diagnostic worker is read-only; real business-state transitions begin in later phases.
 - There is no database-level outbox claim column yet. Phase 2 relies on deterministic BullMQ job IDs, conditional publish marking, bounded job retention, and idempotent workers.
 - Catalog cache, Shopify cursor pagination, product webhooks, and manual catalog sync remain Phase 3 work.
 - CSV import and merchant-facing import UI remain Phase 4 work.
 - Shopify order creation, rate limiting, and reconciliation remain Phase 5 work.
+
+## Phase 3 Implementation Notes
+
+Completed catalog cache and pagination changes:
+
+- Added reusable opaque keyset cursor helpers for local descending `createdAt, id` pagination.
+- Replaced the template home product mutation with an OrderRelay dashboard that shows cache status, cache age, active variant count, ambiguous SKU count, running sync state, and a keyset-paginated cached variant list.
+- Added manual catalog sync from the embedded UI. The action creates or reuses a running `CatalogSyncRun` and inserts a `catalog.bootstrap` outbox event instead of calling Shopify inline.
+- Implemented Shopify Admin GraphQL `productVariants(first, after)` full sync pagination with checkpoint persistence after each page.
+- Implemented safe sync resume from `CatalogSyncRun.lastProcessedCursor`.
+- Preserved the previous active cache on sync failure and marked the shop `STALE` when a previous sync existed or `FAILED` when no successful sync existed.
+- Marked variants not seen in a completed full sync as deleted only after the full sync succeeds.
+- Added targeted product refresh behavior for product create/update webhooks and deletion marking for product delete webhooks.
+- Added product webhook routes for `products/create`, `products/update`, and `products/delete`; the routes authenticate, deduplicate by Shopify webhook ID, persist a receipt, insert a catalog refresh outbox event, and return quickly.
+- Added worker-side catalog queue processing for full sync and product refresh jobs.
+- Added scheduled stale-cache reconciliation in the worker. It scans active shops and creates sync outbox work without calling Shopify inline.
+- Retained duplicate SKUs as separate catalog rows and added SKU resolution that reports duplicate active matches as ambiguous.
+- Added Phase 3 tests for cursor validation, keyset args, multi-page sync, sync resume, failed-sync cache preservation, and duplicate SKU ambiguity.
+
+Phase 3 dependency changes:
+
+- No new dependencies were added.
+
+Phase 3 scope boundaries:
+
+- Import batches, order intents, order lines, CSV parsing, mapping UI, and import preview remain Phase 4 work.
+- Shopify order creation, write scopes, rate limiting, retry classification, and reconciliation remain Phase 5 work.
+- Dead-letter records and Needs Attention replay remain Phase 6 work.
 
 ## Phased Roadmap
 
@@ -237,8 +265,7 @@ Phase 2 - Queue, worker, and outbox:
 
 Phase 3 - Catalog cache and pagination:
 
-- Add catalog read models and Shopify cursor pagination.
-- Add resumable sync checkpoints, product webhook ingestion, manual sync, staleness state, and local keyset cursors.
+- Completed in Phase 3: catalog cache dashboard, manual sync, Shopify cursor pagination, resumable checkpoints, product webhook ingestion, targeted refresh, stale-cache reconciliation, duplicate SKU ambiguity detection, and local keyset cursors.
 
 Phase 4 - Import domain and embedded UI:
 
