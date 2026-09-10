@@ -1,0 +1,162 @@
+# OrderRelay Architecture
+
+OrderRelay is planned as a focused Shopify embedded application for reliable CSV-based external order ingestion. The MVP imports orders from external systems into Shopify while preventing duplicate business writes and keeping progress visible from local state.
+
+## Phase 0 Baseline Architecture
+
+```mermaid
+flowchart TD
+  Merchant[Merchant in Shopify Admin] --> Web[React Router web app]
+  Web --> Auth[Shopify React Router auth helpers]
+  Web --> Prisma[Prisma Client]
+  Prisma --> SQLite[(SQLite dev.sqlite)]
+  Web --> Shopify[Shopify Admin GraphQL API]
+  Shopify --> Webhooks[App webhooks]
+  Webhooks --> Prisma
+```
+
+Phase 0 baseline behavior:
+
+- Authenticated embedded pages use `authenticate.admin`.
+- The app layout renders only Home and Additional page navigation.
+- The home action makes synchronous demo Admin GraphQL mutations.
+- Webhooks use `authenticate.webhook` and return directly after session changes.
+- Prisma stores only Shopify sessions.
+- There is no queue, worker, outbox, catalog cache, import domain, local pagination, or dead-letter workflow.
+
+## Phase 1 Foundation Architecture
+
+```mermaid
+flowchart TD
+  Merchant[Merchant in Shopify Admin] --> Web[React Router web app]
+  Web --> Auth[Shopify React Router auth helpers]
+  Web --> Prisma[Prisma Client]
+  Prisma --> Postgres[(PostgreSQL)]
+  Web --> Health[Health and readiness routes]
+  Health --> Redis[(Redis)]
+  Web --> Shopify[Shopify Admin GraphQL API]
+  Shopify --> Webhooks[App webhooks]
+  Webhooks --> Prisma
+```
+
+Phase 1 behavior:
+
+- Prisma now targets PostgreSQL through `DATABASE_URL`.
+- PostgreSQL schema foundation exists for sessions, shops, catalog cache, imports, order intents, outbox events, webhook receipts, and dead-letter records.
+- Redis is configured for local infrastructure and readiness checks, but no BullMQ queues or workers are implemented yet.
+- Shopify auth still uses the existing Shopify React Router helpers and Prisma session adapter.
+- `/health` and `/ready` provide liveness and dependency readiness without exposing secrets.
+
+## Target Architecture
+
+```mermaid
+flowchart TD
+  UI[Embedded Shopify Admin UI] --> Web[React Router web process]
+  Web --> DB[(PostgreSQL)]
+  Web --> Outbox[Transactional outbox rows]
+  Webhooks[Shopify webhooks] --> Web
+  Outbox --> Dispatcher[Outbox dispatcher]
+  Dispatcher --> Redis[(Redis)]
+  Redis --> Queues[BullMQ queues]
+  Queues --> Worker[Worker process]
+  Worker --> DB
+  Worker --> Shopify[Shopify Admin GraphQL API]
+  Shopify --> Webhooks
+```
+
+Target rules:
+
+- PostgreSQL is the source of truth for merchant state, catalog cache, imports, order intents, outbox events, webhook receipts, and dead-letter records.
+- Redis and BullMQ coordinate delivery and retries; they are not permanent business storage.
+- HTTP routes must not create many Shopify orders synchronously.
+- Progress polling reads PostgreSQL only.
+- Worker processing is restart-safe and treats queue delivery as at-least-once.
+- Shopify access tokens, raw CSV rows, customer addresses, phones, and emails are never placed in queue payloads or logs.
+- Business idempotency is enforced with database constraints, deterministic identifiers, state transitions, and reconciliation.
+
+## Domain Model
+
+Planned tenant-owned models:
+
+- `Shop`: installed merchant state, granted scopes, uninstall markers, catalog freshness, and status.
+- `CatalogVariant`: local read model of Shopify product variants, indexed by shop and normalized SKU but not unique by SKU.
+- `SkuMapping`: source-system SKU mappings to selected Shopify variant GIDs.
+- `ImportBatch`: one uploaded CSV import attempt and aggregate progress counts.
+- `OrderIntent`: durable business identity for one external order.
+- `OrderLine`: line-level parsed SKU, mapping, quantity, unit price, and validation state.
+- `OutboxEvent`: durable event awaiting publication to BullMQ.
+- `WebhookReceipt`: dedupe record for Shopify webhook deliveries.
+- `DeadLetterRecord`: safe reference to permanently failed work.
+- `CatalogSyncRun` or checkpoint model: resumable Shopify catalog pagination state.
+
+Every tenant-owned query must be scoped by the authenticated or internally trusted shop. Browser-supplied shop IDs or domains must not authorize data access.
+
+## Runtime Processes
+
+Web process:
+
+- Handles Shopify OAuth and embedded app authentication.
+- Serves loaders/actions/resource routes.
+- Parses CSV uploads, validates input, writes import records, and inserts outbox events.
+- Authenticates webhooks, persists receipts/outbox events, and returns quickly.
+- Exposes local status and pagination APIs backed by PostgreSQL.
+
+Worker process:
+
+- Dispatches outbox events to BullMQ or runs a dispatcher loop alongside processors.
+- Processes order write, catalog sync, reconciliation, webhook, and maintenance jobs.
+- Reloads business state from PostgreSQL before doing work.
+- Gets an offline Admin GraphQL client with `unauthenticated.admin(shop)` using a shop domain loaded from trusted database state.
+- Performs atomic claims and controlled state transitions.
+- Records sanitized errors and dead-letter state when retry limits are exhausted.
+
+## Key Workflows
+
+CSV import:
+
+1. Merchant opens New Import.
+2. Merchant enters a source system and uploads a CSV.
+3. Browser-generated idempotency key is submitted with the upload.
+4. Server validates size, content, headers, and row count.
+5. Rows are streamed, grouped by `external_order_id`, normalized, and hashed.
+6. Import batch, order intents, and order lines are stored transactionally.
+7. SKU resolution uses local catalog cache and source-system mappings.
+8. Ready orders can be confirmed, which inserts outbox events instead of calling Shopify inline.
+9. Workers create Shopify orders and update local progress.
+
+Catalog sync:
+
+1. A sync job pages Shopify product variants with `first` and `after`.
+2. Each processed page updates variants and stores a checkpoint.
+3. A completed full sync marks variants not seen in that run as deleted.
+4. Failed syncs preserve the previous valid cache and mark staleness.
+
+Webhook ingestion:
+
+1. HTTP route authenticates with `authenticate.webhook`.
+2. Route stores a unique receipt by shop/topic/webhook ID and a minimal outbox event.
+3. Duplicate deliveries become no-ops.
+4. Workers process catalog refresh, uninstall, or scope-change effects outside the request.
+
+Order creation:
+
+1. Confirming a batch queues order intents through the outbox.
+2. Worker atomically claims `QUEUED` or due `RETRY_WAIT` records.
+3. Worker creates Shopify orders using deterministic source identifiers.
+4. Safe user errors move to Needs Attention; transient errors retry with backoff.
+5. Ambiguous write results enter reconciliation before any blind retry.
+6. Succeeded and already-terminal intents no-op on duplicate jobs.
+
+## Observability And Safety
+
+Structured logs should include safe operational keys such as shop domain, import batch ID, order intent ID, job ID, and operation name. Logs must exclude emails, addresses, phone numbers, raw CSV contents, access tokens, and stack traces sent to merchants.
+
+Health checks should distinguish:
+
+- Web process liveness.
+- PostgreSQL readiness.
+- Redis readiness.
+- Worker queue connectivity.
+- Catalog cache freshness.
+
+The app should report reliability honestly: it aims for effectively-once business behavior under at-least-once delivery, not guaranteed exactly-once processing.

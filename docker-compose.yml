@@ -1,0 +1,67 @@
+name: orderrelay
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-orderrelay}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-orderrelay}
+      POSTGRES_DB: ${POSTGRES_DB:-orderrelay_development}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  web:
+    profiles: ["app"]
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: ${WEB_DATABASE_URL:-postgresql://orderrelay:orderrelay@postgres:5432/orderrelay_development?schema=public}
+      REDIS_URL: ${WEB_REDIS_URL:-redis://redis:6379}
+      SHOPIFY_API_KEY: ${SHOPIFY_API_KEY:-}
+      SHOPIFY_API_SECRET: ${SHOPIFY_API_SECRET:-}
+      SHOPIFY_APP_URL: ${SHOPIFY_APP_URL:-}
+      SCOPES: ${SCOPES:-write_products,write_metaobjects,write_metaobject_definitions}
+      SHOP_CUSTOM_DOMAIN: ${SHOP_CUSTOM_DOMAIN:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      ORDER_WORKER_CONCURRENCY: ${ORDER_WORKER_CONCURRENCY:-5}
+      CATALOG_WORKER_CONCURRENCY: ${CATALOG_WORKER_CONCURRENCY:-2}
+      CATALOG_SYNC_PAGE_SIZE: ${CATALOG_SYNC_PAGE_SIZE:-100}
+      CATALOG_STALE_AFTER_MINUTES: ${CATALOG_STALE_AFTER_MINUTES:-60}
+      IMPORT_MAX_BYTES: ${IMPORT_MAX_BYTES:-5242880}
+      IMPORT_MAX_ROWS: ${IMPORT_MAX_ROWS:-10000}
+      JOB_MAX_ATTEMPTS: ${JOB_MAX_ATTEMPTS:-5}
+      RATE_LIMIT_SAFETY_MARGIN: ${RATE_LIMIT_SAFETY_MARGIN:-0.8}
+      OUTBOX_POLL_INTERVAL_MS: ${OUTBOX_POLL_INTERVAL_MS:-2000}
+      OUTBOX_BATCH_SIZE: ${OUTBOX_BATCH_SIZE:-50}
+    ports:
+      - "${PORT:-3000}:3000"
+
+volumes:
+  postgres-data:
+  redis-data:

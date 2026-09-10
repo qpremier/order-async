@@ -1,0 +1,331 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// PostgreSQL is the durable source of truth for OrderRelay business state.
+// The Shopify Prisma session adapter still owns the Session table shape below.
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ShopStatus {
+  ACTIVE
+  NEEDS_REAUTH
+  UNINSTALLED
+}
+
+enum CatalogSyncStatus {
+  NEVER_SYNCED
+  SYNCING
+  FRESH
+  STALE
+  FAILED
+}
+
+enum CatalogSyncRunStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+enum ImportBatchStatus {
+  DRAFT
+  VALIDATING
+  READY
+  QUEUED
+  PROCESSING
+  PARTIALLY_COMPLETED
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum OrderIntentStatus {
+  DRAFT
+  VALIDATING
+  NEEDS_MAPPING
+  AMBIGUOUS_MAPPING
+  INVALID
+  READY
+  QUEUED
+  PROCESSING
+  RETRY_WAIT
+  AMBIGUOUS_RESULT
+  SUCCEEDED
+  DEAD_LETTER
+  CANCELLED
+}
+
+enum OrderLineValidationStatus {
+  UNVALIDATED
+  VALID
+  NEEDS_MAPPING
+  AMBIGUOUS_MAPPING
+  INVALID
+}
+
+enum ErrorCategory {
+  VALIDATION
+  MISSING_MAPPING
+  AMBIGUOUS_MAPPING
+  SHOPIFY_USER_ERROR
+  AUTHENTICATION
+  MISSING_SCOPE
+  SHOP_UNINSTALLED
+  THROTTLED
+  NETWORK_TRANSIENT
+  SHOPIFY_SERVER_TRANSIENT
+  AMBIGUOUS_WRITE_RESULT
+  INTERNAL_BUG
+  UNKNOWN
+}
+
+model Session {
+  id                  String    @id
+  shop                String
+  state               String
+  isOnline            Boolean   @default(false)
+  scope               String?
+  expires             DateTime?
+  accessToken         String
+  userId              BigInt?
+  firstName           String?
+  lastName            String?
+  email               String?
+  accountOwner        Boolean   @default(false)
+  locale              String?
+  collaborator        Boolean?  @default(false)
+  emailVerified       Boolean?  @default(false)
+  refreshToken        String?
+  refreshTokenExpires DateTime?
+
+  @@index([shop])
+}
+
+model Shop {
+  id                String            @id @default(cuid())
+  domain            String            @unique
+  status            ShopStatus        @default(ACTIVE)
+  grantedScopes     String?
+  installedAt       DateTime          @default(now())
+  uninstalledAt     DateTime?
+  lastCatalogSyncAt DateTime?
+  catalogSyncStatus CatalogSyncStatus @default(NEVER_SYNCED)
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  catalogSyncRuns   CatalogSyncRun[]
+  catalogVariants   CatalogVariant[]
+  skuMappings       SkuMapping[]
+  importBatches     ImportBatch[]
+  orderIntents      OrderIntent[]
+  orderLines        OrderLine[]
+  outboxEvents      OutboxEvent[]
+  webhookReceipts   WebhookReceipt[]
+  deadLetterRecords DeadLetterRecord[]
+}
+
+model CatalogSyncRun {
+  id                  String               @id @default(cuid())
+  shopId              String
+  status              CatalogSyncRunStatus @default(RUNNING)
+  startedAt           DateTime             @default(now())
+  completedAt         DateTime?
+  lastProcessedCursor String?
+  lastErrorCategory   ErrorCategory?
+  sanitizedLastError  String?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([shopId, status, createdAt])
+}
+
+model CatalogVariant {
+  id                String    @id @default(cuid())
+  shopId            String
+  shopifyVariantGid String
+  shopifyProductGid String
+  sku               String?
+  normalizedSku     String?
+  variantTitle      String?
+  productTitle      String
+  price             Decimal?  @db.Decimal(12, 2)
+  currency          String?
+  productStatus     String?
+  shopifyUpdatedAt  DateTime?
+  cachedAt          DateTime  @default(now())
+  deletedAt         DateTime?
+  lastSeenSyncRunId String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@unique([shopId, shopifyVariantGid])
+  @@index([shopId, normalizedSku])
+  @@index([shopId, deletedAt])
+}
+
+model SkuMapping {
+  id                    String   @id @default(cuid())
+  shopId                String
+  sourceSystem          String
+  externalSku           String
+  normalizedExternalSku String
+  shopifyVariantGid     String
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@unique([shopId, sourceSystem, normalizedExternalSku])
+}
+
+model ImportBatch {
+  id                   String            @id @default(cuid())
+  shopId               String
+  sourceSystem         String
+  originalFileName     String
+  idempotencyKey       String
+  status               ImportBatchStatus @default(DRAFT)
+  totalOrders          Int               @default(0)
+  readyOrders          Int               @default(0)
+  queuedOrders         Int               @default(0)
+  processingOrders     Int               @default(0)
+  succeededOrders      Int               @default(0)
+  failedOrders         Int               @default(0)
+  needsAttentionOrders Int               @default(0)
+  version              Int               @default(0)
+  confirmedAt          DateTime?
+  completedAt          DateTime?
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+
+  shop         Shop          @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  orderIntents OrderIntent[]
+
+  @@unique([shopId, idempotencyKey])
+  @@index([shopId, createdAt, id])
+}
+
+model OrderIntent {
+  id                  String            @id @default(cuid())
+  shopId              String
+  importBatchId       String
+  sourceSystem        String
+  externalOrderId     String
+  payloadHash         String
+  sourceIdentifier    String
+  status              OrderIntentStatus @default(DRAFT)
+  shopifyOrderGid     String?
+  shopifyOrderName    String?
+  attemptCount        Int               @default(0)
+  lastErrorCategory   ErrorCategory?
+  lastErrorCode       String?
+  sanitizedLastError  String?
+  nextAttemptAt       DateTime?
+  processingStartedAt DateTime?
+  succeededAt         DateTime?
+  version             Int               @default(0)
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  shop              Shop               @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  importBatch       ImportBatch        @relation(fields: [importBatchId], references: [id], onDelete: Cascade)
+  orderLines        OrderLine[]
+  deadLetterRecords DeadLetterRecord[]
+
+  @@unique([shopId, sourceSystem, externalOrderId])
+  @@index([shopId, status, createdAt, id])
+  @@index([importBatchId, createdAt, id])
+  @@index([shopId, sourceIdentifier])
+}
+
+model OrderLine {
+  id                String                    @id @default(cuid())
+  shopId            String
+  orderIntentId     String
+  originalSku       String
+  normalizedSku     String
+  shopifyVariantGid String?
+  quantity          Int
+  unitPrice         Decimal                   @db.Decimal(12, 2)
+  validationStatus  OrderLineValidationStatus @default(UNVALIDATED)
+  validationMessage String?
+  createdAt         DateTime                  @default(now())
+  updatedAt         DateTime                  @updatedAt
+
+  shop        Shop        @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  orderIntent OrderIntent @relation(fields: [orderIntentId], references: [id], onDelete: Cascade)
+
+  @@index([orderIntentId])
+  @@index([shopId, normalizedSku])
+}
+
+model OutboxEvent {
+  id               String    @id @default(cuid())
+  shopId           String
+  aggregateType    String
+  aggregateId      String
+  eventType        String
+  payload          Json
+  publishedAt      DateTime?
+  attemptCount     Int       @default(0)
+  lastPublishError String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([publishedAt, createdAt])
+  @@index([eventType, publishedAt])
+  @@index([shopId, createdAt])
+}
+
+model WebhookReceipt {
+  id              String    @id @default(cuid())
+  shopId          String
+  webhookId       String
+  topic           String
+  payloadHash     String
+  receivedAt      DateTime  @default(now())
+  processedAt     DateTime?
+  processingError String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@unique([shopId, webhookId])
+  @@index([shopId, topic, receivedAt])
+}
+
+model DeadLetterRecord {
+  id               String        @id @default(cuid())
+  shopId           String
+  orderIntentId    String
+  jobType          String
+  errorCategory    ErrorCategory
+  errorCode        String?
+  sanitizedMessage String
+  attempts         Int
+  firstFailedAt    DateTime
+  lastFailedAt     DateTime
+  replayedAt       DateTime?
+  replayedBy       String?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  shop        Shop        @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  orderIntent OrderIntent @relation(fields: [orderIntentId], references: [id], onDelete: Cascade)
+
+  @@index([shopId, createdAt])
+  @@index([shopId, orderIntentId])
+}
