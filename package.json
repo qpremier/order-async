@@ -41,6 +41,7 @@
     "@shopify/shopify-app-react-router": "^1.2.1",
     "@shopify/shopify-app-session-storage-prisma": "^9.0.0",
     "bullmq": "^6.3.4",
+    "csv-parse": "^6.1.0",
     "ioredis": "^6.0.0",
     "isbot": "^5.1.31",
     "prisma": "^6.16.3",

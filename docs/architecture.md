@@ -102,6 +102,37 @@ Phase 3 behavior:
 - Local catalog lists use opaque keyset cursors instead of large offset queries.
 - The worker includes a reconciliation scheduler that periodically inserts sync outbox work for active shops with stale, failed, missing, or never-synced cache state.
 
+## Phase 4 Import Domain Architecture
+
+```mermaid
+flowchart TD
+  Merchant[Merchant in Shopify Admin] --> Upload[New Import route]
+  Upload --> Parser[Streaming CSV validation]
+  Parser --> Hash[Canonical grouping and payload hashes]
+  Hash --> Tx[PostgreSQL transaction]
+  Tx --> Batch[(ImportBatch)]
+  Tx --> Intent[(OrderIntent and OrderLine)]
+  Intent --> Catalog[(CatalogVariant and SkuMapping)]
+  Merchant --> Preview[Import Details route]
+  Preview --> Batch
+  Preview --> Intent
+  Preview --> Mapping[Explicit SKU mapping]
+  Mapping --> Catalog
+  Mapping --> Intent
+```
+
+Phase 4 behavior:
+
+- The web process streams uploaded CSV content through a maintained parser, enforces byte and row limits, and rejects malformed or inconsistent rows with bounded merchant-safe errors.
+- Rows are grouped by external order identity. Normalized order data and deterministically sorted lines form a canonical SHA-256 payload hash.
+- Raw CSV files are not persisted or logged. PostgreSQL stores only the normalized order fields needed by later phases.
+- A draft batch and any new intents/lines are committed atomically. Missing or duplicate catalog SKUs change only their affected intents to mapping states.
+- `(shopId, idempotencyKey)` protects batch requests. `(shopId, sourceSystem, externalOrderId)` protects the durable business order identity.
+- `ImportBatchOrderIntent` allows a later batch to reference an existing same-hash intent. A different hash returns a conflict and leaves the existing identity unchanged.
+- Preview and mapping access derive the tenant from the authenticated Shopify session; browser-provided shop identifiers never authorize data access.
+- Import details use opaque descending `createdAt, id` keyset cursors. Mapping selections are verified against active catalog variants in the same shop.
+- This phase produces drafts only. No order outbox events, BullMQ order jobs, or Shopify order mutations are created.
+
 ## Target Architecture
 
 ```mermaid

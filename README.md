@@ -2,7 +2,7 @@
 
 OrderRelay is a Shopify embedded app for reliable external order imports. The app is being evolved incrementally from the Shopify React Router template.
 
-Phase 3 adds the local catalog cache, Shopify cursor pagination, manual catalog sync, product webhook ingestion, and local keyset pagination. CSV import, Shopify order creation, and dead-letter replay are planned for later phases.
+Phase 4 adds streaming CSV validation, canonical external-order identity and hashing, draft import previews, explicit SKU mapping, tenant-safe import details, and local keyset pagination. Shopify order creation and dead-letter replay remain later phases.
 
 ## Stack
 
@@ -82,6 +82,18 @@ The app dashboard shows catalog cache freshness, active cached variants, ambiguo
 Product create, update, and delete webhooks are authenticated, deduplicated in PostgreSQL, converted into catalog refresh outbox events, and returned quickly. Webhook routes do not run Shopify GraphQL calls inline.
 
 The catalog query requires the `read_products` scope.
+
+## Draft CSV Imports
+
+Open **New import** in the embedded app, enter a stable source-system identifier, and upload a CSV. Required columns are:
+
+```text
+external_order_id,processed_at,email,currency,sku,quantity,unit_price
+```
+
+The parser enforces `IMPORT_MAX_BYTES` and `IMPORT_MAX_ROWS`, groups lines by external order ID, validates order-level consistency, and stores normalized draft records without retaining the uploaded file. Preview and mapping reads use the local PostgreSQL catalog only; Phase 4 makes no Shopify order API calls.
+
+Repeated batch keys return the original batch. A repeated source/external order with the same canonical payload reuses its durable intent; changed content returns a conflict instead of overwriting it.
 
 ## Phase 2 Diagnostic Flow
 

@@ -8,17 +8,20 @@ import {
   listCatalogVariantsPage,
 } from "../services/catalog/catalog-cache.server";
 import { requestCatalogFullSync } from "../services/catalog/catalog-sync-request.server";
+import { listImportBatchesPage } from "../services/imports/import-domain.server";
 import { InvalidCursorError } from "../services/pagination/cursor.server";
 import { getEnvironment } from "../services/security/environment.server";
 import { authenticate } from "../shopify.server";
 
 const VARIANT_PAGE_SIZE = 10;
+const IMPORT_PAGE_SIZE = 5;
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
   const environment = getEnvironment();
   const url = new URL(request.url);
   const cursor = url.searchParams.get("cursor");
+  const importCursor = url.searchParams.get("importCursor");
   const shop = await db.shop.upsert({
     where: {
       domain: session.shop,
@@ -35,7 +38,7 @@ export const loader = async ({ request }) => {
   });
 
   try {
-    const [cacheStatus, variantsPage] = await Promise.all([
+    const [cacheStatus, variantsPage, importsPage] = await Promise.all([
       getCatalogCacheStatus(db, {
         shopId: shop.id,
         staleAfterMinutes: environment.CATALOG_STALE_AFTER_MINUTES,
@@ -44,6 +47,11 @@ export const loader = async ({ request }) => {
         shopId: shop.id,
         cursor,
         first: VARIANT_PAGE_SIZE,
+      }),
+      listImportBatchesPage(db, {
+        shopId: shop.id,
+        cursor: importCursor,
+        first: IMPORT_PAGE_SIZE,
       }),
     ]);
 
@@ -66,6 +74,20 @@ export const loader = async ({ request }) => {
         })),
         hasNextPage: variantsPage.hasNextPage,
         endCursor: variantsPage.endCursor,
+      },
+      importsPage: {
+        items: importsPage.items.map((batch) => ({
+          id: batch.id,
+          sourceSystem: batch.sourceSystem,
+          originalFileName: batch.originalFileName,
+          status: batch.status,
+          totalOrders: batch.totalOrders,
+          readyOrders: batch.readyOrders,
+          needsAttentionOrders: batch.needsAttentionOrders,
+          createdAt: batch.createdAt.toISOString(),
+        })),
+        hasNextPage: importsPage.hasNextPage,
+        endCursor: importsPage.endCursor,
       },
     };
   } catch (error) {
@@ -107,7 +129,7 @@ export const action = async ({ request }) => {
 };
 
 export default function Index() {
-  const { cacheStatus, variantsPage } = useLoaderData();
+  const { cacheStatus, variantsPage, importsPage } = useLoaderData();
   const fetcher = useFetcher();
   const shopify = useAppBridge();
   const isSyncing =
@@ -131,6 +153,16 @@ export default function Index() {
           Sync catalog
         </s-button>
       </fetcher.Form>
+
+      <s-section heading="External order imports">
+        <s-stack direction="block" gap="base">
+          <s-paragraph>
+            Upload, validate, and resolve catalog mappings before creating
+            Shopify orders.
+          </s-paragraph>
+          <s-link href="/app/imports/new">Start new import</s-link>
+        </s-stack>
+      </s-section>
 
       <s-section heading="Catalog cache">
         <s-stack direction="block" gap="base">
@@ -163,6 +195,46 @@ export default function Index() {
             </s-box>
           )}
         </s-stack>
+      </s-section>
+
+      <s-section heading="Recent imports">
+        {importsPage.items.length > 0 ? (
+          <s-stack direction="block" gap="base">
+            {importsPage.items.map((batch) => (
+              <s-box
+                key={batch.id}
+                padding="base"
+                borderWidth="base"
+                borderRadius="base"
+              >
+                <s-stack direction="block" gap="small">
+                  <s-link href={`/app/imports/${batch.id}`}>
+                    {batch.originalFileName}
+                  </s-link>
+                  <s-paragraph>
+                    {batch.sourceSystem} · {formatStatus(batch.status)} ·{" "}
+                    {batch.readyOrders}/{batch.totalOrders} ready
+                  </s-paragraph>
+                  {batch.needsAttentionOrders > 0 && (
+                    <s-text>
+                      {batch.needsAttentionOrders} order(s) need mapping
+                    </s-text>
+                  )}
+                </s-stack>
+              </s-box>
+            ))}
+            {importsPage.hasNextPage && importsPage.endCursor && (
+              <s-link href={`/app?importCursor=${importsPage.endCursor}`}>
+                Next imports
+              </s-link>
+            )}
+          </s-stack>
+        ) : (
+          <s-stack direction="block" gap="base">
+            <s-paragraph>No imports yet.</s-paragraph>
+            <s-link href="/app/imports/new">Start your first import</s-link>
+          </s-stack>
+        )}
       </s-section>
 
       <s-section heading="Cached variants">

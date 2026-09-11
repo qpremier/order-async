@@ -208,37 +208,53 @@ model ImportBatch {
   createdAt            DateTime          @default(now())
   updatedAt            DateTime          @updatedAt
 
-  shop         Shop          @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  orderIntents OrderIntent[]
+  shop                   Shop                     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  originatedOrderIntents OrderIntent[]            @relation("OriginatingImportBatch")
+  orderIntentLinks       ImportBatchOrderIntent[]
 
   @@unique([shopId, idempotencyKey])
   @@index([shopId, createdAt, id])
 }
 
 model OrderIntent {
-  id                  String            @id @default(cuid())
-  shopId              String
-  importBatchId       String
-  sourceSystem        String
-  externalOrderId     String
-  payloadHash         String
-  sourceIdentifier    String
-  status              OrderIntentStatus @default(DRAFT)
-  shopifyOrderGid     String?
-  shopifyOrderName    String?
-  attemptCount        Int               @default(0)
-  lastErrorCategory   ErrorCategory?
-  lastErrorCode       String?
-  sanitizedLastError  String?
-  nextAttemptAt       DateTime?
-  processingStartedAt DateTime?
-  succeededAt         DateTime?
-  version             Int               @default(0)
-  createdAt           DateTime          @default(now())
-  updatedAt           DateTime          @updatedAt
+  id                   String            @id @default(cuid())
+  shopId               String
+  importBatchId        String
+  sourceSystem         String
+  externalOrderId      String
+  payloadHash          String
+  sourceIdentifier     String?
+  processedAt          DateTime
+  email                String
+  currency             String
+  shippingFirstName    String?
+  shippingLastName     String?
+  shippingAddress1     String?
+  shippingAddress2     String?
+  shippingCity         String?
+  shippingProvince     String?
+  shippingProvinceCode String?
+  shippingCountryCode  String?
+  shippingZip          String?
+  shippingPhone        String?
+  note                 String?
+  status               OrderIntentStatus @default(DRAFT)
+  shopifyOrderGid      String?
+  shopifyOrderName     String?
+  attemptCount         Int               @default(0)
+  lastErrorCategory    ErrorCategory?
+  lastErrorCode        String?
+  sanitizedLastError   String?
+  nextAttemptAt        DateTime?
+  processingStartedAt  DateTime?
+  succeededAt          DateTime?
+  version              Int               @default(0)
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
 
-  shop              Shop               @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  importBatch       ImportBatch        @relation(fields: [importBatchId], references: [id], onDelete: Cascade)
+  shop              Shop                     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  originatingBatch  ImportBatch              @relation("OriginatingImportBatch", fields: [importBatchId], references: [id], onDelete: Cascade)
+  importBatchLinks  ImportBatchOrderIntent[]
   orderLines        OrderLine[]
   deadLetterRecords DeadLetterRecord[]
 
@@ -246,6 +262,21 @@ model OrderIntent {
   @@index([shopId, status, createdAt, id])
   @@index([importBatchId, createdAt, id])
   @@index([shopId, sourceIdentifier])
+}
+
+// An external order keeps one durable OrderIntent identity, while later uploads
+// with the same canonical payload can reference it without duplicating the intent.
+model ImportBatchOrderIntent {
+  importBatchId String
+  orderIntentId String
+  reused        Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  importBatch ImportBatch @relation(fields: [importBatchId], references: [id], onDelete: Cascade)
+  orderIntent OrderIntent @relation(fields: [orderIntentId], references: [id], onDelete: Cascade)
+
+  @@id([importBatchId, orderIntentId])
+  @@index([orderIntentId])
 }
 
 model OrderLine {

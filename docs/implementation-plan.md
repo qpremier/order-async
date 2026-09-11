@@ -6,6 +6,10 @@ Phase 1 established the PostgreSQL foundation, environment validation, local Pos
 
 Phase 2 adds BullMQ queue infrastructure, the separate worker process, transactional outbox dispatching, and a harmless diagnostic path. It intentionally does not implement catalog synchronization, CSV ingestion, Shopify order creation, rate limiting, or dead-letter replay behavior.
 
+Phase 3 established the local catalog cache, resumable Shopify pagination, product webhook ingestion, manual synchronization, and local keyset pagination.
+
+Phase 4 adds the draft import domain and embedded merchant workflow. It intentionally stops before batch confirmation, outbox creation for orders, Shopify order writes, retry/reconciliation behavior, and dead-letter handling.
+
 ## Current Baseline
 
 The repository is still close to the Shopify React Router template:
@@ -249,6 +253,33 @@ Phase 3 scope boundaries:
 - Shopify order creation, write scopes, rate limiting, retry classification, and reconciliation remain Phase 5 work.
 - Dead-letter records and Needs Attention replay remain Phase 6 work.
 
+## Phase 4 Implementation Notes
+
+Completed import-domain and embedded UI changes:
+
+- Added maintained `csv-parse` streaming ingestion with actual byte counting, row limits, strict headers, ISO timestamp, email, currency, quantity, decimal-money, and order-level consistency validation.
+- Grouped CSV rows by `external_order_id`, normalized line values, and generated stable SHA-256 hashes from canonical payloads whose line ordering is deterministic.
+- Persisted normalized order-level data and order lines without retaining raw CSV files.
+- Created draft batches transactionally and resolved each line against tenant-scoped `SkuMapping` and active `CatalogVariant` records.
+- Kept missing and ambiguous mappings local to affected orders while leaving independently valid orders `READY`.
+- Added explicit mapping persistence and draft revalidation. The selected variant is verified as an active variant owned by the authenticated shop.
+- Added database-backed batch idempotency, including concurrent duplicate handling.
+- Reused the one durable `OrderIntent` when the same source/external order and payload hash is uploaded again. Added `ImportBatchOrderIntent` membership so later draft batches can reference that identity without copying it.
+- Rejected a reused external identity with a different payload hash atomically as a conflict; existing intent data is never overwritten.
+- Added tenant-scoped New Import and Import Details pages, safe validation feedback, preview counts, mapping controls, and cursor-paginated order intents.
+- Added recent draft imports to the dashboard with keyset pagination.
+- Kept `sourceIdentifier` nullable in Phase 4 because its exact Shopify order-creation contract and backfill belong to Phase 5.
+
+Phase 4 dependency changes:
+
+- Runtime: added `csv-parse` `^6.1.0`.
+
+Phase 4 scope boundaries:
+
+- Draft confirmation, order outbox events, `orderCreate`, write-order scopes, worker claims, rate gating, error classification, and ambiguity reconciliation remain Phase 5 work.
+- Status polling, dead-letter records, Needs Attention replay, and strengthened uninstall/scope behavior remain Phase 6 work.
+- Sample CSV artifacts and broader operational/portfolio documentation remain Phase 7 work.
+
 ## Phased Roadmap
 
 Phase 1 - PostgreSQL foundation:
@@ -269,7 +300,7 @@ Phase 3 - Catalog cache and pagination:
 
 Phase 4 - Import domain and embedded UI:
 
-- Add import batches, order intents, lines, SKU mappings, streaming CSV validation, preview, mapping resolution, import details, and batch idempotency.
+- Completed in Phase 4: draft import batches, reusable order intents, order lines, SKU mappings, streaming CSV validation, canonical hashes, preview and mapping UI, tenant isolation, order-intent cursors, and batch idempotency.
 
 Phase 5 - Order creation pipeline:
 
