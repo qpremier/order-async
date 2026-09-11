@@ -65,6 +65,7 @@ describe("Phase 2 queue job descriptors", () => {
         eventType: OUTBOX_EVENT_TYPES.orderCreate,
         aggregateType: "OrderIntent",
         aggregateId: "order-intent-1",
+        payload: { orderIntentId: "order-intent-1" },
       }),
     );
 

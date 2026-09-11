@@ -86,7 +86,9 @@ export async function publishOutboxEvent(
 
     if (updated.count === 0) {
       logger.debug("outbox.event.already_published", {
+        correlationId: options.event.id,
         outboxEventId: options.event.id,
+        shopId: options.event.shopId,
         queueName: published.queueName,
         jobId: published.jobId,
         operationName: published.jobName,
@@ -100,6 +102,7 @@ export async function publishOutboxEvent(
     }
 
     logger.info("outbox.event.published", {
+      correlationId: options.event.id,
       outboxEventId: options.event.id,
       shopId: options.event.shopId,
       queueName: published.queueName,
@@ -129,6 +132,7 @@ export async function publishOutboxEvent(
     });
 
     logger.warn("outbox.event.publish_failed", {
+      correlationId: options.event.id,
       outboxEventId: options.event.id,
       shopId: options.event.shopId,
       operationName: options.event.eventType,

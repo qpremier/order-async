@@ -1,6 +1,6 @@
 # OrderRelay Architecture
 
-OrderRelay is planned as a focused Shopify embedded application for reliable CSV-based external order ingestion. The MVP imports orders from external systems into Shopify while preventing duplicate business writes and keeping progress visible from local state.
+OrderRelay is a focused Shopify embedded application for reliable CSV-based external order ingestion. The MVP imports orders from external systems into Shopify while preventing duplicate business writes and keeping progress visible from local state.
 
 ## Phase 0 Baseline Architecture
 
@@ -190,7 +190,35 @@ Phase 6 behavior:
 - Lifecycle webhook delivery IDs are deduplicated before any state change. Uninstall and scope state is committed in the HTTP transaction; broader cancellation, pausing, and resumption runs through maintenance work.
 - Every order and catalog GraphQL call rechecks durable shop status and the operation-specific scope immediately before network dispatch. Redis queue state is not trusted as the capability source of truth.
 
-## Target Architecture
+## Phase 7 Hardening Architecture
+
+```mermaid
+flowchart LR
+  Request[Authenticated request] --> RequestCorrelation[Safe request correlation ID]
+  RequestCorrelation --> Web[React Router web]
+  Web --> Tx[(PostgreSQL transaction)]
+  Tx --> Outbox[Outbox event and correlation root]
+  Outbox --> Projector[Event-specific safe payload projector]
+  Projector --> Queue[(BullMQ job)]
+  Queue --> Worker[Guarded worker]
+  Worker --> Shopify[Shopify Admin GraphQL]
+  Web --> Logs[Structured redacted JSON logs]
+  Outbox --> Logs
+  Queue --> Logs
+  Worker --> Logs
+```
+
+Phase 7 behavior:
+
+- Server and worker logs are JSON events with stable operation names and safe operational identifiers.
+- The durable outbox event ID becomes the asynchronous `correlationId`, allowing publication, queue, processor, and completion events to be joined without customer data.
+- Server-rendered requests accept only a bounded safe correlation header or generate a UUID, then return it in `X-Correlation-ID`.
+- Sensitive context keys and common credential/PII patterns are redacted as defense in depth.
+- Queue publication parses every supported outbox type through an allowlisted payload schema, stripping unrelated or sensitive fields before Redis.
+- A representative integration test covers sample CSV parsing, batch idempotency, confirmation, outbox projection, mocked Shopify order creation, and local terminal status using PostgreSQL.
+- GitHub Actions installs from `package-lock.json` and validates migrations, lint, types, tests, and production builds with PostgreSQL and Redis services.
+
+## Current Architecture
 
 ```mermaid
 flowchart TD
@@ -217,9 +245,49 @@ Target rules:
 - Shopify access tokens, raw CSV rows, customer addresses, phones, and emails are never placed in queue payloads or logs.
 - Business idempotency is enforced with database constraints, deterministic identifiers, state transitions, and reconciliation.
 
+## Idempotency And Ambiguity Sequence
+
+```mermaid
+sequenceDiagram
+  actor Merchant
+  participant Web as React Router web
+  participant DB as PostgreSQL
+  participant Dispatcher as Outbox dispatcher
+  participant Queue as BullMQ
+  participant Worker
+  participant Shopify
+
+  Merchant->>Web: Upload CSV + Idempotency-Key
+  Web->>DB: Transaction: batch, intent, lines
+  DB-->>Web: Existing batch for duplicate key
+  Merchant->>Web: Confirm batch
+  Web->>DB: Transaction: QUEUED + order.create outbox
+  Dispatcher->>DB: Read unpublished event
+  Dispatcher->>Queue: Add deterministic job ID
+  Dispatcher->>DB: Mark published
+  Queue->>Worker: At-least-once delivery
+  Worker->>DB: Atomic eligible-state claim
+  alt already completed or another worker owns claim
+    DB-->>Worker: No-op
+  else claimed
+    Worker->>Shopify: orderCreate with deterministic sourceIdentifier
+    alt conclusive success
+      Shopify-->>Worker: Order GID and name
+      Worker->>DB: Mark SUCCEEDED
+    else response may be lost
+      Worker->>DB: Mark AMBIGUOUS_RESULT + reconciliation outbox
+      Queue->>Worker: Delayed reconciliation
+      Worker->>Shopify: Read-only source_identifier search
+      Worker->>DB: Record one match or retain Needs Attention
+    end
+  end
+```
+
+The sequence deliberately separates transport deduplication from business idempotency. A deterministic BullMQ ID prevents common duplicate deliveries, while database uniqueness, guarded state transitions, deterministic Shopify source identity, and reconciliation protect the business outcome.
+
 ## Domain Model
 
-Planned tenant-owned models:
+Current tenant-owned models:
 
 - `Shop`: installed merchant state, granted scopes, uninstall markers, catalog freshness, and status.
 - `CatalogVariant`: local read model of Shopify product variants, indexed by shop and normalized SKU but not unique by SKU.
@@ -230,7 +298,7 @@ Planned tenant-owned models:
 - `OutboxEvent`: durable event awaiting publication to BullMQ.
 - `WebhookReceipt`: dedupe record for Shopify webhook deliveries.
 - `DeadLetterRecord`: safe reference to permanently failed work.
-- `CatalogSyncRun` or checkpoint model: resumable Shopify catalog pagination state.
+- `CatalogSyncRun`: resumable Shopify catalog pagination state.
 
 Every tenant-owned query must be scoped by the authenticated or internally trusted shop. Browser-supplied shop IDs or domains must not authorize data access.
 
@@ -292,7 +360,7 @@ Order creation:
 
 ## Observability And Safety
 
-Structured logs should include safe operational keys such as shop domain, import batch ID, order intent ID, job ID, and operation name. Logs must exclude emails, addresses, phone numbers, raw CSV contents, access tokens, and stack traces sent to merchants.
+Structured logs include safe operational keys such as correlation ID, shop ID, import batch ID, order intent ID, outbox event ID, job ID, and operation name. Logs exclude emails, addresses, phone numbers, raw CSV contents, access tokens, and stack traces sent to merchants. Event-specific queue schemas enforce the same minimal-data boundary before Redis.
 
 Health checks should distinguish:
 
@@ -303,3 +371,5 @@ Health checks should distinguish:
 - Catalog cache freshness.
 
 The app should report reliability honestly: it aims for effectively-once business behavior under at-least-once delivery, not guaranteed exactly-once processing.
+
+Detailed recovery behavior, error categories, cache consistency, and health interpretation are documented in `docs/operations.md`.

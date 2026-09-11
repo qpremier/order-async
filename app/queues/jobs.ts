@@ -32,6 +32,7 @@ export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES];
 
 export const queueJobDataSchema = z.object({
   eventId: z.string().min(1),
+  correlationId: z.string().min(1).optional(),
   shopId: z.string().min(1),
   aggregateType: z.string().min(1),
   aggregateId: z.string().min(1),
@@ -122,6 +123,41 @@ const EVENT_ROUTING = {
   },
 } as const satisfies Record<string, OutboxEventRouting>;
 
+const nonEmptyId = z.string().min(1);
+const SAFE_PAYLOAD_SCHEMAS = {
+  [OUTBOX_EVENT_TYPES.orderCreate]: z
+    .object({ orderIntentId: nonEmptyId })
+    .strip(),
+  [OUTBOX_EVENT_TYPES.orderReconcileAmbiguous]: z
+    .object({
+      orderIntentId: nonEmptyId,
+      delayMs: z.number().int().nonnegative().optional(),
+    })
+    .strip(),
+  [OUTBOX_EVENT_TYPES.catalogBootstrap]: z
+    .object({ syncRunId: nonEmptyId })
+    .strip(),
+  [OUTBOX_EVENT_TYPES.catalogRefreshProduct]: z
+    .object({
+      productGid: nonEmptyId,
+      productNumericId: nonEmptyId.optional().nullable(),
+      deleted: z.boolean().optional(),
+      webhookReceiptId: nonEmptyId.optional(),
+    })
+    .strip(),
+  [OUTBOX_EVENT_TYPES.catalogReconcile]: z.object({}).strip(),
+  [OUTBOX_EVENT_TYPES.importValidate]: z.object({}).strip(),
+  [OUTBOX_EVENT_TYPES.webhookProcess]: z
+    .object({ webhookReceiptId: nonEmptyId })
+    .strip(),
+  [OUTBOX_EVENT_TYPES.deadLetterReplay]: z
+    .object({ orderIntentId: nonEmptyId })
+    .strip(),
+  [OUTBOX_EVENT_TYPES.phase2Diagnostic]: z
+    .object({ diagnosticId: nonEmptyId })
+    .strip(),
+} as const;
+
 export interface QueueJobDescriptor {
   queueName: QueueName;
   jobName: JobName;
@@ -135,21 +171,23 @@ export function describeOutboxJob(
   enqueuedAt: Date = new Date(),
 ): QueueJobDescriptor {
   const routing = getOutboxEventRouting(event.eventType);
+  const payload = buildSafeQueuePayload(event.eventType, event.payload);
   const dedupeValue =
     routing.dedupeSource === "aggregateId" ? event.aggregateId : event.id;
 
-  const delay = getRequestedDelay(event);
+  const delay = getRequestedDelay(event.eventType, payload);
   return {
     queueName: routing.queueName,
     jobName: routing.jobName,
     jobId: buildDeterministicJobId(routing.jobIdPrefix, dedupeValue),
     data: {
       eventId: event.id,
+      correlationId: event.id,
       shopId: event.shopId,
       aggregateType: event.aggregateType,
       aggregateId: event.aggregateId,
       eventType: event.eventType,
-      payload: event.payload,
+      payload,
       operationName: routing.jobName,
       enqueuedAt: enqueuedAt.toISOString(),
     },
@@ -159,6 +197,19 @@ export function describeOutboxJob(
       ...(delay > 0 ? { delay } : {}),
     },
   };
+}
+
+export function buildSafeQueuePayload(
+  eventType: string,
+  payload: unknown,
+): Record<string, unknown> {
+  const schema =
+    SAFE_PAYLOAD_SCHEMAS[eventType as keyof typeof SAFE_PAYLOAD_SCHEMAS];
+  if (!schema) {
+    throw new Error(`Unsupported outbox event type: ${eventType}`);
+  }
+
+  return schema.parse(payload);
 }
 
 export function getOutboxEventRouting(eventType: string): OutboxEventRouting {
@@ -175,16 +226,12 @@ export function buildDeterministicJobId(prefix: string, value: string): string {
   return `${prefix}__${value.replaceAll(":", "_")}`;
 }
 
-function getRequestedDelay(event: OutboxEventLike): number {
-  if (event.eventType !== OUTBOX_EVENT_TYPES.orderReconcileAmbiguous) return 0;
-  if (
-    typeof event.payload !== "object" ||
-    event.payload === null ||
-    Array.isArray(event.payload)
-  ) {
-    return 0;
-  }
-  const delayMs = (event.payload as Record<string, unknown>).delayMs;
+function getRequestedDelay(
+  eventType: string,
+  payload: Record<string, unknown>,
+): number {
+  if (eventType !== OUTBOX_EVENT_TYPES.orderReconcileAmbiguous) return 0;
+  const delayMs = payload.delayMs;
   return typeof delayMs === "number" && Number.isFinite(delayMs)
     ? Math.max(0, Math.min(Math.floor(delayMs), 24 * 60 * 60 * 1000))
     : 0;

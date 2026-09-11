@@ -1,0 +1,2 @@
+external_order_id,processed_at,email,currency,sku,quantity,unit_price
+ERP-INVALID-1,not-a-timestamp,not-an-email,US,SKU-RED,0,19.999

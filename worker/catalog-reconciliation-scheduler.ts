@@ -1,6 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
 import { scheduleStaleCatalogSyncs } from "../app/services/catalog/catalog-sync-request.server.js";
 import {
+  createCorrelationId,
   createSilentLogger,
   sanitizeErrorMessage,
   type Logger,
@@ -53,6 +54,7 @@ export class CatalogReconciliationScheduler {
     }
 
     this.running = true;
+    const correlationId = createCorrelationId();
 
     try {
       const result = await scheduleStaleCatalogSyncs(this.options.prisma, {
@@ -61,12 +63,14 @@ export class CatalogReconciliationScheduler {
 
       if (result.scheduled > 0) {
         this.logger.info("catalog.reconciliation.scheduled", {
+          correlationId,
           operationName: "catalog.reconciliation",
           scheduled: result.scheduled,
         });
       }
     } catch (error) {
       this.logger.warn("catalog.reconciliation.failed", {
+        correlationId,
         operationName: "catalog.reconciliation",
         error: sanitizeErrorMessage(error),
       });

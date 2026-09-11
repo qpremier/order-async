@@ -235,7 +235,14 @@ async function processOrderCreate(
       shopifyOrderName: result.orderName,
       now,
     });
-    log(options, "order.create.succeeded", data, job, orderIntentId);
+    log(
+      options,
+      "order.create.succeeded",
+      data,
+      job,
+      orderIntentId,
+      intent.importBatchId,
+    );
     return { status: "succeeded" as const, orderIntentId };
   }
   if (result.outcome === "ambiguous") {
@@ -246,7 +253,14 @@ async function processOrderCreate(
       reconcileDelayMs: options.reconciliationDelayMs,
       now,
     });
-    log(options, "order.create.ambiguous", data, job, orderIntentId);
+    log(
+      options,
+      "order.create.ambiguous",
+      data,
+      job,
+      orderIntentId,
+      intent.importBatchId,
+    );
     return { status: "ambiguous" as const, orderIntentId };
   }
   if (result.outcome === "retry") {
@@ -283,7 +297,14 @@ async function processOrderCreate(
     code: result.code,
     message: result.message,
   });
-  log(options, "order.create.permanent_failure", data, job, orderIntentId);
+  log(
+    options,
+    "order.create.permanent_failure",
+    data,
+    job,
+    orderIntentId,
+    intent.importBatchId,
+  );
   return { status: "permanent-failure" as const, orderIntentId };
 }
 
@@ -388,7 +409,14 @@ async function processOrderReconciliation(
         now,
         allowedStatuses: ["AMBIGUOUS_RESULT"],
       });
-      log(options, "order.reconcile.succeeded", data, job, orderIntentId);
+      log(
+        options,
+        "order.reconcile.succeeded",
+        data,
+        job,
+        orderIntentId,
+        intent.importBatchId,
+      );
       return { status: "reconciled" as const, orderIntentId };
     }
     if (result.outcome === "multiple") {
@@ -484,11 +512,14 @@ function log(
   data: QueueJobData,
   job: ProcessableJob<QueueJobData>,
   orderIntentId: string,
+  importBatchId: string,
 ) {
   (options.logger ?? createSilentLogger()).info(message, {
+    correlationId: data.correlationId ?? data.eventId,
     operationName: job.name,
     queueName: QUEUE_NAMES.orderWrite,
     shopId: data.shopId,
+    importBatchId,
     orderIntentId,
     outboxEventId: data.eventId,
     jobId: job.id,

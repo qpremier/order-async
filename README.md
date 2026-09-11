@@ -1,8 +1,25 @@
 # OrderRelay
 
-OrderRelay is a Shopify embedded app for reliable external order imports. The app is being evolved incrementally from the Shopify React Router template.
+OrderRelay is a Shopify embedded app for reliable CSV-based external order imports. It validates orders against a local catalog cache, persists durable order intent, and creates Shopify orders asynchronously through a transactional outbox and BullMQ workers.
 
-Phase 6 adds local ETag-based status polling, lifecycle-webhook safety, durable dead-letter history, a Needs Attention workflow, and controlled replay without changing the original order identity.
+The system targets effectively-once business behavior under at-least-once delivery. It does not claim mathematically guaranteed exactly-once order creation: inconclusive Shopify writes enter read-only reconciliation before any further create attempt.
+
+## Architecture
+
+```mermaid
+flowchart LR
+  Merchant[Merchant in Shopify Admin] --> Web[React Router web]
+  Web --> DB[(PostgreSQL source of truth)]
+  Webhooks[Shopify webhooks] --> Web
+  DB --> Dispatcher[Transactional outbox dispatcher]
+  Dispatcher --> Redis[(Redis and BullMQ)]
+  Redis --> Worker[Worker process]
+  Worker --> DB
+  Worker --> Shopify[Shopify Admin GraphQL]
+  Shopify --> Webhooks
+```
+
+HTTP actions persist local state and outbox rows; they do not create batches of Shopify orders inline. Redis transports work, while PostgreSQL remains authoritative for imports, order identities, progress, webhook receipts, and dead-letter history. See [the architecture guide](docs/architecture.md) for the detailed workflows and idempotency sequence.
 
 ## Stack
 
@@ -15,10 +32,17 @@ Phase 6 adds local ETag-based status polling, lifecycle-webhook safety, durable 
 
 ## Local Setup
 
-Install dependencies with npm so `package-lock.json` stays authoritative:
+Prerequisites:
+
+- Node.js `>=20.19 <22` or `>=22.12`
+- npm, using the checked-in `package-lock.json`
+- Docker with Compose
+- Shopify CLI and a Shopify development store for embedded-app verification
+
+Install the exact locked dependencies:
 
 ```sh
-npm install
+npm ci
 ```
 
 Start local infrastructure:
@@ -27,7 +51,7 @@ Start local infrastructure:
 docker compose up -d postgres redis
 ```
 
-Copy `.env.example` to `.env` for non-Shopify-CLI commands and fill the Shopify values supplied by your app configuration. The default local database URL is:
+Copy `.env.example` to `.env`. Prisma and Docker Compose read this file; commands launched directly in a separate shell, including `npm run worker:dev`, must also receive these variables in their process environment. Fill the Shopify values supplied by your app configuration. The default host database URL is:
 
 ```sh
 postgresql://orderrelay:orderrelay@localhost:5432/orderrelay_development?schema=public
@@ -52,6 +76,14 @@ Run the worker in a separate terminal:
 ```sh
 npm run worker:dev
 ```
+
+The worker requires the same `DATABASE_URL`, `REDIS_URL`, Shopify credentials, app URL, and scopes as the web process. For an all-container deployment-style run, configure a publicly reachable Shopify app URL and use:
+
+```sh
+docker compose --profile app up --build
+```
+
+That profile runs migrations once, then starts separate `web` and `worker` services from the same image.
 
 ## Useful Commands
 
@@ -94,6 +126,13 @@ external_order_id,processed_at,email,currency,sku,quantity,unit_price
 The parser enforces `IMPORT_MAX_BYTES` and `IMPORT_MAX_ROWS`, groups lines by external order ID, validates order-level consistency, and stores normalized draft records without retaining the uploaded file. Preview and mapping reads use the local PostgreSQL catalog only; Phase 4 makes no Shopify order API calls.
 
 Repeated batch keys return the original batch. A repeated source/external order with the same canonical payload reuses its durable intent; changed content returns a conflict instead of overwriting it.
+
+### Sample files
+
+- `examples/orders-valid.csv` contains two orders and three order lines. Its `SKU-RED` and `SKU-BLUE` values must exist in the connected store cache or be explicitly mapped.
+- `examples/orders-missing-sku.csv` demonstrates the `NEEDS_MAPPING` workflow.
+- `examples/orders-invalid.csv` demonstrates safe validation errors for invalid timestamp, email, currency, quantity, and price values.
+- `examples/orders-duplicate-external-id.csv` reuses `ERP-1001` with changed content. Upload `orders-valid.csv` first, then this file with the same `demo-erp` source system to demonstrate external-order conflict protection.
 
 ## Order Creation Pipeline
 
@@ -139,9 +178,32 @@ docker compose --profile app up --build
 
 The app profile includes a one-shot `migrate` service, plus separate `web` and `worker` services built from the same image.
 
+## Verification
+
+For the full test suite, start PostgreSQL and Redis, set `DATABASE_URL` and `REDIS_URL`, and deploy the migrations before running the checks. Tests that require infrastructure skip when those variables are absent.
+
+```sh
+npm ci
+npm run prisma:generate
+npm run migrate:deploy
+npm run lint
+npm run typecheck
+npm test
+npm run build
+```
+
+GitHub Actions runs this sequence on a supported Node.js version with isolated PostgreSQL and Redis services. Shopify network calls in automated tests are mocked; the CI workflow does not deploy the app or require production Shopify credentials.
+
+## Operations And Limitations
+
+Structured JSON logs carry a correlation ID, operation name, and the applicable shop, batch, intent, outbox, queue, and job identifiers. Known sensitive context keys and sensitive-looking text are redacted, and queue publication reduces each event to an event-specific operational payload before writing to Redis.
+
+The [operations guide](docs/operations.md) covers health checks, queue recovery, cache consistency, error categories, log safety, incident checks, and manual verification. Current limitations include no automated browser test through real Shopify OAuth, no automated PII retention purge, no inventory/fulfillment/payment workflows, and no guarantee that Shopify can never create a duplicate after an irreducibly ambiguous remote write.
+
 ## Documentation
 
 - `docs/implementation-plan.md`
 - `docs/architecture.md`
+- `docs/operations.md`
 - `docs/adr/001-postgresql-and-bullmq.md`
 - `docs/adr/002-idempotency-and-transactional-outbox.md`

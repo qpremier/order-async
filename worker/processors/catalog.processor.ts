@@ -65,6 +65,7 @@ export async function processCatalogJob(
 
   if (job.name === JOB_NAMES.catalogReconcile) {
     logger.info("catalog.reconcile.noop", {
+      correlationId: data.correlationId ?? data.eventId,
       operationName: JOB_NAMES.catalogReconcile,
       queueName: QUEUE_NAMES.catalogSync,
       shopId: data.shopId,
@@ -128,6 +129,7 @@ async function processCatalogBootstrapJob(
   });
 
   logger.info("catalog.bootstrap.handled", {
+    correlationId: data.correlationId ?? data.eventId,
     operationName: JOB_NAMES.catalogBootstrap,
     queueName: QUEUE_NAMES.catalogSync,
     shopId: data.shopId,
@@ -205,6 +207,7 @@ async function processCatalogRefreshProductJob(
   }
 
   logger.info("catalog.refresh_product.handled", {
+    correlationId: data.correlationId ?? data.eventId,
     operationName: JOB_NAMES.catalogRefreshProduct,
     queueName: QUEUE_NAMES.catalogSync,
     shopId: data.shopId,

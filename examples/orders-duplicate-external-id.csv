@@ -1,0 +1,2 @@
+external_order_id,processed_at,email,currency,sku,quantity,unit_price
+ERP-1001,2026-09-10T12:00:00Z,alex@example.com,USD,SKU-RED,4,19.95

@@ -1,0 +1,4 @@
+external_order_id,processed_at,email,currency,sku,quantity,unit_price,shipping_first_name,shipping_last_name,shipping_address1,shipping_address2,shipping_city,shipping_province,shipping_province_code,shipping_country_code,shipping_zip,shipping_phone,note
+ERP-1001,2026-09-10T12:00:00Z,alex@example.com,USD,SKU-RED,2,19.95,Alex,Rivera,100 Market St,,Austin,Texas,TX,US,78701,+1 512 555 0100,Priority wholesale order
+ERP-1001,2026-09-10T12:00:00Z,alex@example.com,USD,SKU-BLUE,1,8.50,Alex,Rivera,100 Market St,,Austin,Texas,TX,US,78701,+1 512 555 0100,Priority wholesale order
+ERP-1002,2026-09-10T12:05:00Z,sam@example.com,USD,SKU-BLUE,3,8.50,Sam,Chen,22 Pine Ave,Suite 4,Seattle,Washington,WA,US,98101,+1 206 555 0140,Leave at receiving desk

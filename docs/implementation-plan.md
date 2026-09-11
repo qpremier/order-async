@@ -14,6 +14,8 @@ Phase 5 established asynchronous order creation, controlled order state transiti
 
 Phase 6 established database-only status polling, durable failure review and replay, and lifecycle-webhook capability gates. It intentionally stops before Phase 7 hardening, sample artifacts, failure-injection helpers, expanded operations documentation, and CI.
 
+Phase 7 hardens logging and queue payload boundaries, adds correlation IDs, representative pipeline coverage and reusable failure injection, provides the required sample imports and operational documentation, and adds GitHub Actions verification. It completes the scoped seven-phase roadmap without expanding the product beyond external-order ingestion.
+
 ## Current Baseline
 
 The repository is still close to the Shopify React Router template:
@@ -333,6 +335,34 @@ Phase 6 scope boundaries:
 
 - Phase 7 sample CSVs, failure-injection helpers, end-to-end coverage, CI, correlation IDs, and expanded operational/portfolio documentation are not included.
 
+## Phase 7 Implementation Notes
+
+Completed hardening and portfolio changes:
+
+- Hardened the existing newline-delimited JSON logger with log-level parsing, request correlation helpers, injectable clocks/sinks for deterministic tests, sensitive-key redaction, and common email, phone, bearer-token, Shopify-token, and credential-pattern redaction.
+- Added structured web render logs and safe `X-Correlation-ID` response headers. Untrusted inbound correlation values are accepted only when they match a bounded operational-ID format; otherwise a UUID is generated.
+- Made each durable outbox event ID the asynchronous correlation root and included it in dispatcher, queue, and processor logs. Older queue envelopes remain readable because processors fall back to `eventId`.
+- Added event-specific queue payload schemas. Only processor-required operational fields are copied from PostgreSQL outbox payloads to Redis; unrelated fields, including accidentally supplied PII, are stripped.
+- Added reusable asynchronous failure-injection helpers and a Phase 7 hardening test suite for log redaction, correlation, safe queue projection, sample artifacts, and deterministic injected failures.
+- Added a representative PostgreSQL-backed pipeline test that parses the sample CSV, verifies repeated batch idempotency, confirms the batch, projects outbox events, runs order processors against mocked Shopify GraphQL, and verifies terminal local status. It also verifies missing-SKU and changed-external-identity samples.
+- Added all four required CSV artifacts under `examples/`.
+- Expanded the README with prerequisites, reproducible setup, architecture, sample usage, full verification, observability, and limitations.
+- Added the current Phase 7 Mermaid architecture and an idempotency/ambiguity sequence diagram.
+- Added `docs/operations.md` for health, log correlation, error categories, queue/outbox recovery, cache consistency, incident checks, shutdown, manual verification, and known limitations.
+- Added a GitHub Actions workflow using the npm lockfile, a supported Node.js release, PostgreSQL, and Redis to run migrations, lint, type-check, tests, and the production build.
+- Corrected the Docker Compose default scopes to the app's actual minimum scopes and exposed the remaining validated order/rate-control settings to web and worker containers.
+
+Phase 7 dependency and migration changes:
+
+- No dependencies were added or removed.
+- No Prisma migration was added. Correlation uses request IDs and the existing durable outbox event identity.
+
+Phase 7 scope boundaries:
+
+- Browser automation through a live Shopify OAuth/development-store session is not hermetic and is documented as a manual verification step instead of adding a brittle Playwright dependency.
+- CI validates code and infrastructure integration but does not deploy the Shopify app or application infrastructure.
+- Automated customer-data retention/purge and a separate worker-health HTTP endpoint remain known operational limitations.
+
 ## Phased Roadmap
 
 Phase 1 - PostgreSQL foundation:
@@ -365,7 +395,7 @@ Phase 6 - Status polling, webhook safety, and dead letter:
 
 Phase 7 - Hardening and portfolio documentation:
 
-- Add structured logs, failure-injection tests, sample CSVs, README updates, diagrams, operational docs, and CI if hosting supports it.
+- Completed in Phase 7: structured redacted logs, correlation IDs, safe queue payload projection, failure-injection helpers, representative pipeline coverage, sample CSVs, expanded setup/architecture/operations documentation, and GitHub Actions CI.
 
 ## Risks And Assumptions
 

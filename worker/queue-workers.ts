@@ -109,6 +109,17 @@ function createWorker(options: CreateWorkerOptions): Worker<QueueJobData> {
   const worker = new Worker<QueueJobData>(
     options.queueName,
     async (job, token) => {
+      const correlationId = job.data.correlationId ?? job.data.eventId;
+      options.logger.info("queue.job.started", {
+        correlationId,
+        operationName: job.data.operationName,
+        queueName: options.queueName,
+        shopId: job.data.shopId,
+        outboxEventId: job.data.eventId,
+        jobId: job.id,
+        attemptsMade: job.attemptsMade,
+      });
+
       try {
         return await options.processor(job);
       } catch (error) {
@@ -133,6 +144,7 @@ function createWorker(options: CreateWorkerOptions): Worker<QueueJobData> {
 
   worker.on("completed", (job) => {
     options.logger.info("queue.job.completed", {
+      correlationId: job.data.correlationId ?? job.data.eventId,
       operationName: job.data.operationName,
       queueName: options.queueName,
       shopId: job.data.shopId,
@@ -143,6 +155,9 @@ function createWorker(options: CreateWorkerOptions): Worker<QueueJobData> {
 
   worker.on("failed", (job, error) => {
     options.logger.warn("queue.job.failed", {
+      correlationId: job
+        ? (job.data.correlationId ?? job.data.eventId)
+        : undefined,
       operationName: job?.data.operationName,
       queueName: options.queueName,
       shopId: job?.data.shopId,

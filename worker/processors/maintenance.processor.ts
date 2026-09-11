@@ -86,6 +86,7 @@ export async function processMaintenanceJob(
 
   const logger = options.logger ?? createSilentLogger();
   logger.info("maintenance.diagnostic.handled", {
+    correlationId: data.correlationId ?? data.eventId,
     operationName: JOB_NAMES.maintenanceDiagnostic,
     queueName: QUEUE_NAMES.maintenance,
     shopId: data.shopId,
