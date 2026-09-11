@@ -2,7 +2,7 @@
 
 OrderRelay is a Shopify embedded app for reliable external order imports. The app is being evolved incrementally from the Shopify React Router template.
 
-Phase 4 adds streaming CSV validation, canonical external-order identity and hashing, draft import previews, explicit SKU mapping, tenant-safe import details, and local keyset pagination. Shopify order creation and dead-letter replay remain later phases.
+Phase 5 adds asynchronous Shopify order creation, guarded state transitions, per-shop GraphQL cost gating, ambiguity reconciliation, and Shopify Admin order links. Status polling, dead-letter records, Needs Attention, and controlled replay remain Phase 6 work.
 
 ## Stack
 
@@ -94,6 +94,16 @@ external_order_id,processed_at,email,currency,sku,quantity,unit_price
 The parser enforces `IMPORT_MAX_BYTES` and `IMPORT_MAX_ROWS`, groups lines by external order ID, validates order-level consistency, and stores normalized draft records without retaining the uploaded file. Preview and mapping reads use the local PostgreSQL catalog only; Phase 4 makes no Shopify order API calls.
 
 Repeated batch keys return the original batch. A repeated source/external order with the same canonical payload reuses its durable intent; changed content returns a conflict instead of overwriting it.
+
+## Order Creation Pipeline
+
+Confirming an import changes eligible intents to `QUEUED` and writes one `order.create` outbox event per intent in the same PostgreSQL transaction. The HTTP request never calls Shopify. The dispatcher publishes deterministic BullMQ jobs, and the worker reloads tenant and order state before atomically claiming work.
+
+Order creation uses Shopify Admin GraphQL `orderCreate`, resolved variant GIDs, the imported decimal unit prices, and a deterministic non-PII `sourceIdentifier`. Orders are created without payment transactions or a captured financial state. Successful results persist the Shopify order GID and name and expose an embedded Admin link.
+
+Order and catalog GraphQL calls share an atomic Redis rate gate keyed by shop. It restores capacity from Shopify's cost metadata, reserves background headroom for order work, and delays jobs rather than busy-waiting or treating throttling as permanent failure.
+
+An inconclusive mutation response or an expired worker claim becomes `AMBIGUOUS_RESULT`. A delayed read-only reconciliation searches by `source_identifier`; exactly one result is recorded as success, while zero or multiple bounded results remain visible for the Phase 6 Needs Attention workflow. This provides effectively-once behavior under at-least-once delivery, not a mathematical exactly-once guarantee.
 
 ## Phase 2 Diagnostic Flow
 

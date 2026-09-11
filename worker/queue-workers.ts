@@ -1,4 +1,4 @@
-import { Worker, type Job } from "bullmq";
+import { DelayedError, Worker, type Job } from "bullmq";
 import type { PrismaClient } from "@prisma/client";
 import { createBullMqRedisConnection } from "../app/queues/connection.server.js";
 import type { QueueJobData } from "../app/queues/jobs.js";
@@ -11,6 +11,14 @@ import {
 import { processCatalogJob } from "./processors/catalog.processor.js";
 import { processMaintenanceJob } from "./processors/maintenance.processor.js";
 import { processUnsupportedPhase2Job } from "./processors/unsupported.processor.js";
+import {
+  OrderWorkDeferredError,
+  processOrderJob,
+} from "./processors/order.processor.js";
+import {
+  ShopifyRateGate,
+  ShopifyRateLimitDeferredError,
+} from "../app/services/shopify/shopify-rate-gate.server.js";
 
 export interface QueueWorkerOptions {
   redisUrl: string;
@@ -18,6 +26,13 @@ export interface QueueWorkerOptions {
   orderConcurrency: number;
   catalogConcurrency: number;
   catalogPageSize?: number;
+  rateGate?: ShopifyRateGate;
+  orderCreateEstimatedCost?: number;
+  orderReconcileEstimatedCost?: number;
+  catalogQueryEstimatedCost?: number;
+  reconciliationDelayMs?: number;
+  reconciliationMaxAttempts?: number;
+  orderProcessingLeaseMs?: number;
   prefix?: string;
   logger?: Logger;
 }
@@ -32,8 +47,22 @@ export function createQueueWorkers(options: QueueWorkerOptions) {
       concurrency: options.orderConcurrency,
       prefix: options.prefix,
       logger,
-      processor: (job) =>
-        processUnsupportedPhase2Job(job, QUEUE_NAMES.orderWrite),
+      processor: (job) => {
+        if (!options.rateGate) {
+          return processUnsupportedPhase2Job(job, QUEUE_NAMES.orderWrite);
+        }
+        return processOrderJob(job, {
+          prisma: options.prisma,
+          rateGate: options.rateGate,
+          orderCreateEstimatedCost: options.orderCreateEstimatedCost ?? 20,
+          orderReconcileEstimatedCost:
+            options.orderReconcileEstimatedCost ?? 10,
+          reconciliationDelayMs: options.reconciliationDelayMs ?? 5_000,
+          reconciliationMaxAttempts: options.reconciliationMaxAttempts ?? 3,
+          processingLeaseMs: options.orderProcessingLeaseMs ?? 5 * 60 * 1000,
+          logger,
+        });
+      },
     }),
     createWorker({
       queueName: QUEUE_NAMES.catalogSync,
@@ -45,6 +74,8 @@ export function createQueueWorkers(options: QueueWorkerOptions) {
         processCatalogJob(job, {
           prisma: options.prisma,
           pageSize: options.catalogPageSize ?? 100,
+          rateGate: options.rateGate,
+          estimatedQueryCost: options.catalogQueryEstimatedCost ?? 50,
           logger,
         }),
     }),
@@ -77,7 +108,20 @@ interface CreateWorkerOptions {
 function createWorker(options: CreateWorkerOptions): Worker<QueueJobData> {
   const worker = new Worker<QueueJobData>(
     options.queueName,
-    options.processor,
+    async (job, token) => {
+      try {
+        return await options.processor(job);
+      } catch (error) {
+        if (
+          error instanceof OrderWorkDeferredError ||
+          error instanceof ShopifyRateLimitDeferredError
+        ) {
+          await job.moveToDelayed(Date.now() + error.retryAfterMs, token);
+          throw new DelayedError();
+        }
+        throw error;
+      }
+    },
     {
       connection: createBullMqRedisConnection(options.redisUrl, {
         connectionName: `orderrelay-worker-${options.queueName}`,

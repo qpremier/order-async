@@ -7,6 +7,7 @@ import {
   listMappingCandidates,
 } from "../services/imports/import-domain.server";
 import { applySkuMapping } from "../services/imports/sku-mapping.server";
+import { confirmImportBatch } from "../services/orders/order-state.server";
 import { InvalidCursorError } from "../services/pagination/cursor.server";
 import { authenticate } from "../shopify.server";
 
@@ -55,6 +56,10 @@ export const loader = async ({ request, params }) => {
           id: intent.id,
           externalOrderId: intent.externalOrderId,
           status: intent.status,
+          shopifyOrderGid: intent.shopifyOrderGid,
+          shopifyOrderName: intent.shopifyOrderName,
+          lastErrorCategory: intent.lastErrorCategory,
+          sanitizedLastError: intent.sanitizedLastError,
           reused: intent.importBatchLinks[0]?.reused ?? false,
           createdAt: intent.createdAt.toISOString(),
           lines: intent.orderLines.map((line) => ({
@@ -93,11 +98,24 @@ export const action = async ({ request, params }) => {
   if (!shop) throw new Response("Import not found", { status: 404 });
 
   const formData = await request.formData();
-  if (formData.get("intent") !== "map-sku") {
+  const actionIntent = formData.get("intent");
+  if (actionIntent !== "map-sku" && actionIntent !== "confirm-batch") {
     throw new Response("Unsupported action", { status: 400 });
   }
 
   try {
+    if (actionIntent === "confirm-batch") {
+      await db.shop.update({
+        where: { id: shop.id },
+        data: { grantedScopes: session.scope },
+      });
+      await confirmImportBatch(db, {
+        shopId: shop.id,
+        batchId: params.batchId,
+      });
+      return redirect(`/app/imports/${params.batchId}`);
+    }
+
     const normalizedSku = formData.get("normalizedSku");
     const shopifyVariantGid = formData.get("shopifyVariantGid");
     if (
@@ -159,7 +177,7 @@ export default function ImportDetails() {
               tone="warning"
             >
               Only affected orders are blocked. Ready orders remain ready in
-              this draft.
+              this draft while you resolve the remaining mappings.
             </s-banner>
           )}
           {batch.needsAttentionOrders > 0 && (
@@ -176,12 +194,16 @@ export default function ImportDetails() {
               </s-stack>
             </Form>
           )}
-          {batch.readyOrders === batch.totalOrders && (
-            <s-banner heading="Draft is ready" tone="success">
-              Order creation and batch confirmation begin in Phase 5 and are
-              intentionally unavailable in this phase.
-            </s-banner>
-          )}
+          {batch.status === "DRAFT" &&
+            batch.needsAttentionOrders === 0 &&
+            batch.failedOrders === 0 && (
+              <Form method="post">
+                <input type="hidden" name="intent" value="confirm-batch" />
+                <s-button type="submit" variant="primary">
+                  Confirm {batch.readyOrders} ready order(s)
+                </s-button>
+              </Form>
+            )}
         </s-stack>
       </s-section>
 
@@ -202,6 +224,27 @@ export default function ImportDetails() {
                     <s-text>Reused existing order intent</s-text>
                   )}
                 </s-stack>
+                {intent.shopifyOrderGid && (
+                  <s-link href={shopifyAdminOrderHref(intent.shopifyOrderGid)}>
+                    Open {intent.shopifyOrderName || "Shopify order"}
+                  </s-link>
+                )}
+                {intent.sanitizedLastError && (
+                  <s-banner
+                    heading={
+                      intent.lastErrorCategory === "AMBIGUOUS_WRITE_RESULT"
+                        ? "Creation result is being reconciled"
+                        : "Order could not be created"
+                    }
+                    tone={
+                      intent.lastErrorCategory === "AMBIGUOUS_WRITE_RESULT"
+                        ? "warning"
+                        : "critical"
+                    }
+                  >
+                    {intent.sanitizedLastError}
+                  </s-banner>
+                )}
                 {intent.lines.map((line) => (
                   <s-box
                     key={line.id}
@@ -217,7 +260,8 @@ export default function ImportDetails() {
                       {line.validationMessage && (
                         <s-text>{line.validationMessage}</s-text>
                       )}
-                      {line.validationStatus !== "VALID" &&
+                      {batch.status === "DRAFT" &&
+                        line.validationStatus !== "VALID" &&
                         renderMappingForm(
                           line,
                           candidates,
@@ -274,9 +318,16 @@ function renderMappingForm(line, candidates, cursor, variantQuery) {
 function serializeBatch(batch) {
   return {
     ...batch,
+    confirmedAt: batch.confirmedAt?.toISOString() ?? null,
+    completedAt: batch.completedAt?.toISOString() ?? null,
     createdAt: batch.createdAt.toISOString(),
     updatedAt: batch.updatedAt.toISOString(),
   };
+}
+
+function shopifyAdminOrderHref(orderGid) {
+  const numericId = orderGid.split("/").at(-1);
+  return `shopify:admin/orders/${encodeURIComponent(numericId)}`;
 }
 
 function renderMetric(label, value) {

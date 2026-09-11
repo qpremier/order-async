@@ -24,6 +24,12 @@ const positiveInteger = (defaultValue: number) =>
     z.coerce.number().int().positive().default(defaultValue),
   );
 
+const positiveNumber = (defaultValue: number) =>
+  z.preprocess(
+    emptyStringToUndefined,
+    z.coerce.number().positive().default(defaultValue),
+  );
+
 const decimalRatio = (defaultValue: number) =>
   z.preprocess(
     emptyStringToUndefined,
@@ -63,6 +69,14 @@ export const environmentSchema = z.object({
   IMPORT_MAX_ROWS: positiveInteger(10_000),
   JOB_MAX_ATTEMPTS: positiveInteger(5),
   RATE_LIMIT_SAFETY_MARGIN: decimalRatio(0.8),
+  RATE_LIMIT_FALLBACK_MAXIMUM_AVAILABLE: positiveNumber(100),
+  RATE_LIMIT_FALLBACK_RESTORE_RATE: positiveNumber(2),
+  SHOPIFY_ORDER_CREATE_ESTIMATED_COST: positiveNumber(20),
+  SHOPIFY_ORDER_RECONCILE_ESTIMATED_COST: positiveNumber(10),
+  SHOPIFY_CATALOG_QUERY_ESTIMATED_COST: positiveNumber(50),
+  ORDER_RECONCILIATION_DELAY_MS: positiveInteger(5_000),
+  ORDER_RECONCILIATION_MAX_ATTEMPTS: positiveInteger(3),
+  ORDER_PROCESSING_LEASE_MS: positiveInteger(5 * 60 * 1000),
   OUTBOX_POLL_INTERVAL_MS: positiveInteger(2_000),
   OUTBOX_BATCH_SIZE: positiveInteger(50),
 });

@@ -133,6 +133,36 @@ Phase 4 behavior:
 - Import details use opaque descending `createdAt, id` keyset cursors. Mapping selections are verified against active catalog variants in the same shop.
 - This phase produces drafts only. No order outbox events, BullMQ order jobs, or Shopify order mutations are created.
 
+## Phase 5 Order Creation Architecture
+
+```mermaid
+flowchart TD
+  Merchant[Merchant confirms import] --> Tx[PostgreSQL transaction]
+  Tx --> Intent[(QUEUED OrderIntent)]
+  Tx --> Outbox[(order.create OutboxEvent)]
+  Dispatcher[Outbox dispatcher] --> Outbox
+  Dispatcher --> Queue[(BullMQ order-write)]
+  Queue --> Claim[Atomic worker claim]
+  Claim --> Gate[Per-shop Redis cost gate]
+  Gate --> Shopify[Shopify orderCreate]
+  Shopify --> Success[(SUCCEEDED + Shopify order link)]
+  Shopify --> Ambiguous[(AMBIGUOUS_RESULT)]
+  Ambiguous --> Reconcile[Delayed source_identifier query]
+  Reconcile --> Success
+  Reconcile --> Review[Retain ambiguity for Phase 6 review]
+```
+
+Phase 5 behavior:
+
+- Confirmation performs no Shopify calls. It atomically queues eligible order intents, assigns deterministic hashed source identifiers, updates the import batch, and creates minimal outbox events.
+- The order worker reloads tenant state and offline Admin access, checks shop capabilities, no-ops completed intents, and claims only `QUEUED` or due `RETRY_WAIT` records with conditional database updates.
+- Order creation uses `orderCreate` with resolved variant GIDs and imported decimal unit prices. It sends no payment transaction and persists only the resulting order GID/name plus sanitized error state.
+- A Redis Lua gate coordinates GraphQL capacity by shop across order and catalog worker processes. Actual Shopify cost/throttle metadata refreshes the budget; catalog work preserves background headroom for higher-priority order work.
+- Throttled and safely retryable work is delayed in BullMQ without busy-waiting. Duplicate deliveries either fail the atomic claim, wait for the active lease, or no-op after success.
+- A missing or inconclusive mutation response and an expired create lease are treated conservatively as potentially successful writes. They transition to `AMBIGUOUS_RESULT` and create delayed reconciliation work instead of blindly issuing `orderCreate` again.
+- Reconciliation is a read-only `orders` search by exact `source_identifier`. One match records success; zero results retry up to a configured bound; zero or multiple final matches remain ambiguous for merchant review in Phase 6.
+- This phase implements effectively-once order creation safeguards under at-least-once delivery. It does not claim guaranteed exactly-once execution.
+
 ## Target Architecture
 
 ```mermaid

@@ -137,6 +137,7 @@ export function describeOutboxJob(
   const dedupeValue =
     routing.dedupeSource === "aggregateId" ? event.aggregateId : event.id;
 
+  const delay = getRequestedDelay(event);
   return {
     queueName: routing.queueName,
     jobName: routing.jobName,
@@ -154,6 +155,7 @@ export function describeOutboxJob(
     options: {
       jobId: buildDeterministicJobId(routing.jobIdPrefix, dedupeValue),
       priority: routing.priority,
+      ...(delay > 0 ? { delay } : {}),
     },
   };
 }
@@ -170,4 +172,19 @@ export function getOutboxEventRouting(eventType: string): OutboxEventRouting {
 
 export function buildDeterministicJobId(prefix: string, value: string): string {
   return `${prefix}__${value.replaceAll(":", "_")}`;
+}
+
+function getRequestedDelay(event: OutboxEventLike): number {
+  if (event.eventType !== OUTBOX_EVENT_TYPES.orderReconcileAmbiguous) return 0;
+  if (
+    typeof event.payload !== "object" ||
+    event.payload === null ||
+    Array.isArray(event.payload)
+  ) {
+    return 0;
+  }
+  const delayMs = (event.payload as Record<string, unknown>).delayMs;
+  return typeof delayMs === "number" && Number.isFinite(delayMs)
+    ? Math.max(0, Math.min(Math.floor(delayMs), 24 * 60 * 60 * 1000))
+    : 0;
 }

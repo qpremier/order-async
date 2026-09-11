@@ -1,4 +1,5 @@
 import db from "../app/db.server.js";
+import { createBullMqRedisConnection } from "../app/queues/connection.server.js";
 import { createQueueRegistry } from "../app/queues/queues.server.js";
 import {
   createLogger,
@@ -9,6 +10,7 @@ import {
   OutboxDispatcher,
 } from "../app/services/outbox/dispatcher.server.js";
 import { getEnvironment } from "../app/services/security/environment.server.js";
+import { ShopifyRateGate } from "../app/services/shopify/shopify-rate-gate.server.js";
 import { CatalogReconciliationScheduler } from "./catalog-reconciliation-scheduler.js";
 import { createQueueWorkers } from "./queue-workers.js";
 
@@ -24,12 +26,29 @@ async function main() {
     redisUrl: environment.REDIS_URL,
     jobMaxAttempts: environment.JOB_MAX_ATTEMPTS,
   });
+  const rateGateRedis = createBullMqRedisConnection(environment.REDIS_URL, {
+    connectionName: "orderrelay-shopify-rate-gate",
+  });
+  const rateGate = new ShopifyRateGate({
+    redis: rateGateRedis,
+    safetyMargin: environment.RATE_LIMIT_SAFETY_MARGIN,
+    fallbackMaximumAvailable: environment.RATE_LIMIT_FALLBACK_MAXIMUM_AVAILABLE,
+    fallbackRestoreRate: environment.RATE_LIMIT_FALLBACK_RESTORE_RATE,
+  });
   const workers = createQueueWorkers({
     redisUrl: environment.REDIS_URL,
     prisma: db,
     orderConcurrency: environment.ORDER_WORKER_CONCURRENCY,
     catalogConcurrency: environment.CATALOG_WORKER_CONCURRENCY,
     catalogPageSize: environment.CATALOG_SYNC_PAGE_SIZE,
+    rateGate,
+    orderCreateEstimatedCost: environment.SHOPIFY_ORDER_CREATE_ESTIMATED_COST,
+    orderReconcileEstimatedCost:
+      environment.SHOPIFY_ORDER_RECONCILE_ESTIMATED_COST,
+    catalogQueryEstimatedCost: environment.SHOPIFY_CATALOG_QUERY_ESTIMATED_COST,
+    reconciliationDelayMs: environment.ORDER_RECONCILIATION_DELAY_MS,
+    reconciliationMaxAttempts: environment.ORDER_RECONCILIATION_MAX_ATTEMPTS,
+    orderProcessingLeaseMs: environment.ORDER_PROCESSING_LEASE_MS,
     logger,
   });
   const dispatcher = new OutboxDispatcher({
@@ -61,6 +80,7 @@ async function main() {
     await dispatcher.stop();
     await Promise.all(workers.map((worker) => worker.close()));
     await queues.close();
+    await rateGateRedis.quit();
     await db.$disconnect();
 
     logger.info("worker.shutdown.completed", {

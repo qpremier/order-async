@@ -10,6 +10,8 @@ Phase 3 established the local catalog cache, resumable Shopify pagination, produ
 
 Phase 4 adds the draft import domain and embedded merchant workflow. It intentionally stops before batch confirmation, outbox creation for orders, Shopify order writes, retry/reconciliation behavior, and dead-letter handling.
 
+Phase 5 established asynchronous order creation, controlled order state transitions, a shared per-shop Shopify rate gate, and ambiguity reconciliation. It intentionally stops before Phase 6 status polling, dead-letter records, Needs Attention UI, controlled replay, and strengthened uninstall/scope webhook behavior.
+
 ## Current Baseline
 
 The repository is still close to the Shopify React Router template:
@@ -85,12 +87,12 @@ Docker entry points:
 - Redirect URL: placeholder `https://example.com/api/auth`
 - Configured app-specific webhook API version: `2026-10`
 - App/codegen API constant: `ApiVersion.July26` in `app/shopify.server.js` and `.graphqlrc.js`
-- Current scopes: `write_products,write_metaobjects,write_metaobject_definitions`
-- Existing declarative custom data is template demo configuration for a product metafield and an example metaobject.
+- Current scopes: `read_products,read_orders,write_orders`
+- The template demo product/metaobject scopes and declarative custom data were removed in Phase 5 because the OrderRelay UI no longer uses them.
 
 The webhook API version and code API constant should be aligned in a later phase after confirming the supported enum in the installed Shopify package and the intended Shopify API release. Do not change this during Phase 0.
 
-The future MVP will need scopes for reading products/variants and writing orders. The exact minimum scope set should be confirmed in Phase 5 against the active Shopify Admin GraphQL `orderCreate` schema and app review requirements before changing `shopify.app.toml`.
+Phase 5 validated [`orderCreate(OrderCreateOrderInput!)`](https://shopify.dev/docs/api/admin-graphql/2026-07/mutations/orderCreate) and the [`orders`](https://shopify.dev/docs/api/admin-graphql/2026-07/queries/orders) `source_identifier` reconciliation filter against the configured 2026-07 Admin GraphQL schema. The minimum app capabilities used by this implementation are `read_products`, `write_orders`, and `read_orders`. The shared gate consumes the documented [GraphQL cost and throttle status extensions](https://shopify.dev/docs/api/admin-graphql/2026-07#rate-limits).
 
 ## Current Verification Results
 
@@ -280,6 +282,30 @@ Phase 4 scope boundaries:
 - Status polling, dead-letter records, Needs Attention replay, and strengthened uninstall/scope behavior remain Phase 6 work.
 - Sample CSV artifacts and broader operational/portfolio documentation remain Phase 7 work.
 
+## Phase 5 Implementation Notes
+
+Completed order-pipeline changes:
+
+- Added an idempotent confirm-batch transaction that marks only `READY` intents as `QUEUED`, assigns a deterministic hashed `sourceIdentifier`, updates batch aggregates, and creates one minimal `order.create` outbox event per claimed intent.
+- Replaced the order queue placeholder with `order.create` and `order.reconcile-ambiguous` processors that reload trusted shop/order state and use atomic conditional claims.
+- Added controlled transitions for retries, success, permanent Shopify user errors, ambiguous results, reconciliation leases, and linked batch aggregate/status updates.
+- Added Shopify Admin GraphQL `orderCreate` using resolved variant GIDs, imported decimal prices, source tags, optional shipping data, and no payment transactions or captured financial state.
+- Persisted successful Shopify order GIDs/names and added embedded Shopify Admin order links to Import Details.
+- Added a Redis/Lua per-shop GraphQL cost gate shared by catalog and order workers. The gate uses Shopify response cost metadata, configurable fallback estimates, safety margin, jittered delays, and extra background headroom for catalog work.
+- Added conservative ambiguity handling for lost mutation responses and expired create-worker leases. These cases never issue a blind create; they queue delayed reconciliation by `source_identifier`.
+- Added bounded reconciliation attempts. One match records success, while zero or multiple final matches remain `AMBIGUOUS_RESULT` for the Phase 6 Needs Attention workflow.
+- Added Phase 5 tests for confirmation/outbox atomicity, duplicate delivery, concurrent claims, worker restart ambiguity, Shopify user errors, throttling, pre-dispatch failures, lost responses, reconciliation outcomes, order input construction, and Redis rate-gate behavior.
+
+Phase 5 dependency changes:
+
+- No dependencies were added or removed.
+
+Phase 5 scope boundaries:
+
+- Local status APIs, ETags, adaptive polling, `DeadLetterRecord` creation, Needs Attention UI, and controlled replay remain Phase 6 work.
+- APP_UNINSTALLED and APP_SCOPES_UPDATE webhook behavior is not strengthened in this phase; workers do perform an immediate capability check before Shopify calls.
+- Final sample CSVs, failure-injection helpers, expanded operations docs, and CI remain Phase 7 work.
+
 ## Phased Roadmap
 
 Phase 1 - PostgreSQL foundation:
@@ -304,8 +330,7 @@ Phase 4 - Import domain and embedded UI:
 
 Phase 5 - Order creation pipeline:
 
-- Confirm `orderCreate` schema and scopes.
-- Add confirm-batch transaction, order worker, state transitions, retries, reconciliation, rate gating, and Shopify order links.
+- Completed in Phase 5: validated `orderCreate`/reconciliation operations and scopes, confirm-batch outbox transactions, guarded order workers, controlled retries, shared per-shop cost gating, ambiguity reconciliation, and Shopify order links.
 
 Phase 6 - Status polling, webhook safety, and dead letter:
 

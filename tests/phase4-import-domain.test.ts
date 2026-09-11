@@ -161,7 +161,11 @@ describeIfDatabase("Phase 4 import domain", () => {
     expect(await prisma.orderIntent.count({ where: { shopId: shop.id } })).toBe(
       1,
     );
-    expect(await prisma.importBatchOrderIntent.count()).toBe(2);
+    expect(
+      await prisma.importBatchOrderIntent.count({
+        where: { orderIntent: { shopId: shop.id } },
+      }),
+    ).toBe(2);
   });
 
   it("raises a conflict instead of overwriting a changed external order", async () => {

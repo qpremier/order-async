@@ -15,6 +15,10 @@ import {
   type Logger,
 } from "../../app/services/logging/logger.server.js";
 import type { ProcessableJob } from "./maintenance.processor.js";
+import {
+  ShopifyRateGate,
+  withShopifyRateGate,
+} from "../../app/services/shopify/shopify-rate-gate.server.js";
 
 const catalogBootstrapPayloadSchema = z.object({
   syncRunId: z.string().min(1),
@@ -30,6 +34,8 @@ const catalogRefreshProductPayloadSchema = z.object({
 export interface CatalogProcessorOptions {
   prisma: PrismaClient;
   pageSize: number;
+  rateGate?: ShopifyRateGate;
+  estimatedQueryCost?: number;
   logger?: Logger;
 }
 
@@ -87,7 +93,15 @@ async function processCatalogBootstrapJob(
       domain: true,
     },
   });
-  const { admin } = await getUnauthenticatedAdmin(shop.domain);
+  const { admin: rawAdmin } = await getUnauthenticatedAdmin(shop.domain);
+  const admin = options.rateGate
+    ? withShopifyRateGate(rawAdmin, {
+        rateGate: options.rateGate,
+        shopId: shop.id,
+        estimatedCost: options.estimatedQueryCost ?? 50,
+        priority: "background",
+      })
+    : rawAdmin;
   const result = await runFullCatalogSync({
     prisma: options.prisma,
     shopId: shop.id,
@@ -127,7 +141,15 @@ async function processCatalogRefreshProductJob(
       domain: true,
     },
   });
-  const { admin } = await getUnauthenticatedAdmin(shop.domain);
+  const { admin: rawAdmin } = await getUnauthenticatedAdmin(shop.domain);
+  const admin = options.rateGate
+    ? withShopifyRateGate(rawAdmin, {
+        rateGate: options.rateGate,
+        shopId: shop.id,
+        estimatedCost: options.estimatedQueryCost ?? 50,
+        priority: "background",
+      })
+    : rawAdmin;
   const result = await refreshCatalogProduct({
     prisma: options.prisma,
     shopId: shop.id,
