@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { OutboxEvent, PrismaClient, Shop } from "@prisma/client";
-import { ShopStatus } from "@prisma/client";
 import { OUTBOX_EVENT_TYPES } from "../../queues/jobs.js";
 import { createOutboxEvent } from "../outbox/outbox.server.js";
+import { syncAuthenticatedShop } from "../shops/shop-capabilities.server.js";
 
 export interface CreatePhase2DiagnosticOutboxEventInput {
   shopDomain: string;
@@ -28,20 +28,9 @@ export async function createPhase2DiagnosticOutboxEvent(
   const requestedAt = input.requestedAt ?? new Date();
 
   return prisma.$transaction(async (tx) => {
-    const shop = await tx.shop.upsert({
-      where: {
-        domain: input.shopDomain,
-      },
-      update: {
-        status: ShopStatus.ACTIVE,
-        grantedScopes: input.grantedScopes ?? undefined,
-        uninstalledAt: null,
-      },
-      create: {
-        domain: input.shopDomain,
-        status: ShopStatus.ACTIVE,
-        grantedScopes: input.grantedScopes ?? undefined,
-      },
+    const shop = await syncAuthenticatedShop(tx, {
+      shopDomain: input.shopDomain,
+      grantedScopes: input.grantedScopes,
     });
 
     const existingEvent = await tx.outboxEvent.findFirst({

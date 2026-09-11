@@ -163,6 +163,33 @@ Phase 5 behavior:
 - Reconciliation is a read-only `orders` search by exact `source_identifier`. One match records success; zero results retry up to a configured bound; zero or multiple final matches remain ambiguous for merchant review in Phase 6.
 - This phase implements effectively-once order creation safeguards under at-least-once delivery. It does not claim guaranteed exactly-once execution.
 
+## Phase 6 Status And Recovery Architecture
+
+```mermaid
+flowchart TD
+  Details[Import Details UI] --> Status[Local status resource + ETag]
+  Status --> DB[(PostgreSQL)]
+  Lifecycle[Authenticated lifecycle webhooks] --> Receipt[(WebhookReceipt)]
+  Lifecycle --> Capability[(Shop capability state)]
+  Receipt --> Outbox[(Transactional outbox)]
+  Outbox --> Cleanup[Maintenance worker cleanup]
+  Review[Needs Attention UI] --> Replay[Controlled replay transaction]
+  Replay --> History[(DeadLetterRecord history)]
+  Replay --> Outbox
+  Worker[Order/catalog worker] --> Guard[Per-call database capability guard]
+  Guard --> Shopify[Shopify Admin GraphQL]
+```
+
+Phase 6 behavior:
+
+- Import progress is served entirely from tenant-scoped PostgreSQL data. Conditional requests use the batch version and update time, while the browser backs off on unchanged responses, pauses when hidden, and stops at terminal states.
+- Permanent order failures atomically transition to `DEAD_LETTER`, create sanitized `DeadLetterRecord` history, and refresh linked batch aggregates.
+- Needs Attention is a local keyset-paginated view of mapping failures, ambiguous write results, and dead-lettered intents.
+- A dead-letter replay retains the original `OrderIntent` and deterministic Shopify source identifier. It checks current shop capabilities and active variant mappings, records the replay on the prior failure, and creates a new outbox event.
+- Ambiguous writes can only be rechecked through read-only reconciliation. Merchant actions cannot bypass ambiguity safeguards to issue a blind create.
+- Lifecycle webhook delivery IDs are deduplicated before any state change. Uninstall and scope state is committed in the HTTP transaction; broader cancellation, pausing, and resumption runs through maintenance work.
+- Every order and catalog GraphQL call rechecks durable shop status and the operation-specific scope immediately before network dispatch. Redis queue state is not trusted as the capability source of truth.
+
 ## Target Architecture
 
 ```mermaid

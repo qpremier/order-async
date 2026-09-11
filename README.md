@@ -2,7 +2,7 @@
 
 OrderRelay is a Shopify embedded app for reliable external order imports. The app is being evolved incrementally from the Shopify React Router template.
 
-Phase 5 adds asynchronous Shopify order creation, guarded state transitions, per-shop GraphQL cost gating, ambiguity reconciliation, and Shopify Admin order links. Status polling, dead-letter records, Needs Attention, and controlled replay remain Phase 6 work.
+Phase 6 adds local ETag-based status polling, lifecycle-webhook safety, durable dead-letter history, a Needs Attention workflow, and controlled replay without changing the original order identity.
 
 ## Stack
 
@@ -103,7 +103,19 @@ Order creation uses Shopify Admin GraphQL `orderCreate`, resolved variant GIDs, 
 
 Order and catalog GraphQL calls share an atomic Redis rate gate keyed by shop. It restores capacity from Shopify's cost metadata, reserves background headroom for order work, and delays jobs rather than busy-waiting or treating throttling as permanent failure.
 
-An inconclusive mutation response or an expired worker claim becomes `AMBIGUOUS_RESULT`. A delayed read-only reconciliation searches by `source_identifier`; exactly one result is recorded as success, while zero or multiple bounded results remain visible for the Phase 6 Needs Attention workflow. This provides effectively-once behavior under at-least-once delivery, not a mathematical exactly-once guarantee.
+An inconclusive mutation response or an expired worker claim becomes `AMBIGUOUS_RESULT`. A delayed read-only reconciliation searches by `source_identifier`; exactly one result is recorded as success, while zero or multiple bounded results remain visible in Needs Attention. This provides effectively-once behavior under at-least-once delivery, not a mathematical exactly-once guarantee.
+
+## Status And Needs Attention
+
+Import Details polls `/app/api/imports/:batchId/status`, which authenticates the embedded merchant and reads only PostgreSQL. Responses contain aggregate progress and version data without customer fields, support ETags and `304 Not Modified`, and stop being polled after a terminal batch state. Polling slows down when nothing changes and pauses while the browser tab is hidden.
+
+Permanent order failures create sanitized `DeadLetterRecord` history and appear under **Needs attention**. A replay reuses the existing `OrderIntent`, rechecks the shop's scopes and active catalog mappings, records who initiated it, and creates new outbox work. Ambiguous write results expose only a read-only Shopify reconciliation action; they cannot be blindly recreated.
+
+## Lifecycle Webhook Safety
+
+`APP_UNINSTALLED` and `APP_SCOPES_UPDATE` deliveries are authenticated and deduplicated in PostgreSQL. The webhook request commits the immediate shop capability state plus minimal asynchronous cleanup work. Uninstall removes stored sessions and cancels active local work; removal of `write_orders` pauses queued creation without consuming attempts, and restored scopes enqueue eligible work again.
+
+Order and catalog workers check durable shop status and the operation-specific scope immediately before every Shopify GraphQL request. An uninstalled shop receives no new worker API calls, and missing scopes surface as a reauthorization warning in the embedded app.
 
 ## Phase 2 Diagnostic Flow
 

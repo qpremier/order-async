@@ -9,6 +9,7 @@ import {
   createSilentLogger,
   type Logger,
 } from "../../app/services/logging/logger.server.js";
+import { processAppLifecycleWebhook } from "../../app/services/webhooks/app-lifecycle.server.js";
 
 export interface ProcessableJob<TData> {
   id?: string;
@@ -32,8 +33,11 @@ export interface DiagnosticJobResult {
 export async function processMaintenanceJob(
   job: ProcessableJob<QueueJobData>,
   options: MaintenanceProcessorOptions,
-): Promise<DiagnosticJobResult> {
-  if (job.name !== JOB_NAMES.maintenanceDiagnostic) {
+): Promise<DiagnosticJobResult | { status: string; topic?: string }> {
+  if (
+    job.name !== JOB_NAMES.maintenanceDiagnostic &&
+    job.name !== JOB_NAMES.webhookProcess
+  ) {
     throw new Error(`Unsupported maintenance job type: ${job.name}`);
   }
 
@@ -62,6 +66,22 @@ export async function processMaintenanceJob(
     event.aggregateId !== data.aggregateId
   ) {
     throw new Error(`Outbox event mismatch for job ${job.id ?? "unknown"}`);
+  }
+
+  if (job.name === JOB_NAMES.webhookProcess) {
+    const payload = data.payload as Record<string, unknown> | null;
+    if (
+      typeof payload !== "object" ||
+      payload === null ||
+      Array.isArray(payload) ||
+      typeof payload.webhookReceiptId !== "string"
+    ) {
+      throw new Error(`Invalid webhook payload for job ${job.id ?? "unknown"}`);
+    }
+    return processAppLifecycleWebhook(options.prisma, {
+      shopId: data.shopId,
+      webhookReceiptId: payload.webhookReceiptId,
+    });
   }
 
   const logger = options.logger ?? createSilentLogger();

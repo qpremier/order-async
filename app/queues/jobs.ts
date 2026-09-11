@@ -17,6 +17,7 @@ export const OUTBOX_EVENT_TYPES = {
 
 export const JOB_NAMES = {
   orderCreate: "order.create",
+  orderReplay: "order.replay",
   orderReconcileAmbiguous: "order.reconcile-ambiguous",
   catalogBootstrap: "catalog.bootstrap",
   catalogRefreshProduct: "catalog.refresh-product",
@@ -60,14 +61,14 @@ const EVENT_ROUTING = {
     queueName: QUEUE_NAMES.orderWrite,
     jobName: JOB_NAMES.orderCreate,
     jobIdPrefix: "order-create",
-    dedupeSource: "aggregateId",
+    dedupeSource: "eventId",
     priority: 1,
   },
   [OUTBOX_EVENT_TYPES.orderReconcileAmbiguous]: {
     queueName: QUEUE_NAMES.orderWrite,
     jobName: JOB_NAMES.orderReconcileAmbiguous,
     jobIdPrefix: "order-reconcile-ambiguous",
-    dedupeSource: "aggregateId",
+    dedupeSource: "eventId",
     priority: 2,
   },
   [OUTBOX_EVENT_TYPES.catalogBootstrap]: {
@@ -106,10 +107,10 @@ const EVENT_ROUTING = {
     priority: 5,
   },
   [OUTBOX_EVENT_TYPES.deadLetterReplay]: {
-    queueName: QUEUE_NAMES.maintenance,
-    jobName: JOB_NAMES.deadLetterReplay,
+    queueName: QUEUE_NAMES.orderWrite,
+    jobName: JOB_NAMES.orderReplay,
     jobIdPrefix: "dead-letter-replay",
-    dedupeSource: "aggregateId",
+    dedupeSource: "eventId",
     priority: 3,
   },
   [OUTBOX_EVENT_TYPES.phase2Diagnostic]: {

@@ -41,7 +41,7 @@ describe("Phase 5 order queue descriptors", () => {
       payload: { orderIntentId: "intent-1", delayMs: 5_000 },
     });
 
-    expect(descriptor.jobId).toBe("order-reconcile-ambiguous__intent-1");
+    expect(descriptor.jobId).toBe("order-reconcile-ambiguous__event-1");
     expect(descriptor.options.delay).toBe(5_000);
   });
 });

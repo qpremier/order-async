@@ -11,6 +11,7 @@ import {
   type KeysetPage,
 } from "../pagination/cursor.server.js";
 import type { CanonicalImportOrder } from "./import-parser.server.js";
+import { syncAuthenticatedShop } from "../shops/shop-capabilities.server.js";
 
 const sourceSystemSchema = z
   .string()
@@ -96,18 +97,16 @@ export async function createDraftImport(
   const idempotencyKey = validateIdempotencyKey(input.idempotencyKey);
   const originalFileName = sanitizeFileName(input.originalFileName);
 
-  const shop = await prisma.shop.upsert({
-    where: { domain: input.shopDomain },
-    create: {
-      domain: input.shopDomain,
-      grantedScopes: input.grantedScopes,
-    },
-    update: {
-      grantedScopes: input.grantedScopes ?? undefined,
-      status: "ACTIVE",
-      uninstalledAt: null,
-    },
+  const shop = await syncAuthenticatedShop(prisma, {
+    shopDomain: input.shopDomain,
+    grantedScopes: input.grantedScopes,
   });
+  if (shop.status === "UNINSTALLED") {
+    throw new ImportRequestError(
+      "This shop is uninstalled, so new imports are unavailable.",
+      { status: 409 },
+    );
+  }
 
   const original = await findBatchByIdempotencyKey(
     prisma,
@@ -123,6 +122,17 @@ export async function createDraftImport(
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
       return await prisma.$transaction(async (tx) => {
+        const activeShop = await tx.shop.updateMany({
+          where: { id: shop.id, status: { not: "UNINSTALLED" } },
+          data: { updatedAt: new Date() },
+        });
+        if (activeShop.count !== 1) {
+          throw new ImportRequestError(
+            "This shop is uninstalled, so new imports are unavailable.",
+            { status: 409 },
+          );
+        }
+
         const existingBatch = await findBatchByIdempotencyKey(
           tx,
           shop.id,
@@ -499,7 +509,9 @@ function statusFromLines(
 export function aggregateStatuses(statuses: OrderIntentStatus[]) {
   return {
     readyOrders: statuses.filter((status) => status === "READY").length,
-    queuedOrders: statuses.filter((status) => status === "QUEUED").length,
+    queuedOrders: statuses.filter((status) =>
+      ["QUEUED", "RETRY_WAIT"].includes(status),
+    ).length,
     processingOrders: statuses.filter((status) => status === "PROCESSING")
       .length,
     succeededOrders: statuses.filter((status) => status === "SUCCEEDED").length,

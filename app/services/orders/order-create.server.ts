@@ -1,6 +1,7 @@
 import type { OrderIntent, OrderLine } from "@prisma/client";
 import { z } from "zod";
 import type { RateLimitedGraphqlClient } from "../shopify/shopify-rate-gate.server.js";
+import { ShopCapabilityError } from "../shops/shop-capabilities.server.js";
 
 export const ORDER_CREATE_MUTATION = `#graphql
   mutation OrderRelayCreateOrder($order: OrderCreateOrderInput!) {
@@ -95,7 +96,9 @@ export async function createShopifyOrder(
     });
     body = await response.json();
   } catch (error) {
-    if (isRateLimitDeferred(error)) throw error;
+    if (isRateLimitDeferred(error) || error instanceof ShopCapabilityError) {
+      throw error;
+    }
     return {
       outcome: "ambiguous",
       code: "INCONCLUSIVE_RESPONSE",

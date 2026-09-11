@@ -14,6 +14,7 @@ import { reconcileShopifyOrder } from "../../app/services/orders/order-reconcile
 import {
   claimOrderIntentForProcessing,
   claimOrderIntentForReconciliation,
+  cancelOrderIntentForUninstall,
   deferOrderIntentWithoutClaim,
   markOrderIntentAmbiguous,
   markOrderIntentPermanentFailure,
@@ -27,6 +28,11 @@ import {
   type RateLimitedGraphqlClient,
   withShopifyRateGate,
 } from "../../app/services/shopify/shopify-rate-gate.server.js";
+import {
+  hasShopifyScope,
+  ShopCapabilityError,
+  withShopCapabilityGuard,
+} from "../../app/services/shops/shop-capabilities.server.js";
 import {
   createSilentLogger,
   type Logger,
@@ -75,7 +81,10 @@ export async function processOrderJob(
     throw new Error("Order queue payload does not match its aggregate");
   }
 
-  if (job.name === JOB_NAMES.orderCreate) {
+  if (
+    job.name === JOB_NAMES.orderCreate ||
+    job.name === JOB_NAMES.orderReplay
+  ) {
     return processOrderCreate(data, payload.orderIntentId, options, job);
   }
   if (job.name === JOB_NAMES.orderReconcileAmbiguous) {
@@ -130,18 +139,14 @@ async function processOrderCreate(
   }
 
   const capabilityDelayMs = 15 * 60 * 1000;
-  if (current.shop.status !== "ACTIVE") {
-    await deferOrderIntentWithoutClaim(options.prisma, {
+  if (current.shop.status === "UNINSTALLED") {
+    await cancelOrderIntentForUninstall(options.prisma, {
       shopId: data.shopId,
       orderIntentId,
-      category: "SHOP_UNINSTALLED",
-      code: "SHOP_NOT_ACTIVE",
-      message: "Order creation is paused because the shop is not active.",
-      nextAttemptAt: new Date(now.getTime() + capabilityDelayMs),
     });
-    throw new OrderWorkDeferredError(capabilityDelayMs);
+    return { status: "cancelled" as const, orderIntentId };
   }
-  if (!hasScope(current.shop.grantedScopes, "write_orders")) {
+  if (!hasShopifyScope(current.shop.grantedScopes, "write_orders")) {
     await deferOrderIntentWithoutClaim(options.prisma, {
       shopId: data.shopId,
       orderIntentId,
@@ -176,7 +181,12 @@ async function processOrderCreate(
     throw new OrderWorkDeferredError(delayMs);
   }
 
-  const rateLimitedAdmin = withShopifyRateGate(admin, {
+  const guardedAdmin = withShopCapabilityGuard(admin, {
+    prisma: options.prisma,
+    shopId: data.shopId,
+    requiredScope: "write_orders",
+  });
+  const rateLimitedAdmin = withShopifyRateGate(guardedAdmin, {
     rateGate: options.rateGate,
     shopId: data.shopId,
     estimatedCost: options.orderCreateEstimatedCost,
@@ -187,6 +197,24 @@ async function processOrderCreate(
   try {
     result = await createShopifyOrder(rateLimitedAdmin, intent);
   } catch (error) {
+    if (error instanceof ShopCapabilityError) {
+      if (error.reason === "uninstalled") {
+        await cancelOrderIntentForUninstall(options.prisma, {
+          shopId: data.shopId,
+          orderIntentId,
+        });
+        return { status: "cancelled" as const, orderIntentId };
+      }
+      await scheduleOrderIntentRetry(options.prisma, {
+        shopId: data.shopId,
+        orderIntentId,
+        category: "MISSING_SCOPE",
+        code: "WRITE_ORDERS_REQUIRED",
+        message: "Order creation is paused until write_orders is granted.",
+        nextAttemptAt: new Date(now.getTime() + capabilityDelayMs),
+      });
+      throw new OrderWorkDeferredError(capabilityDelayMs);
+    }
     if (!(error instanceof ShopifyRateLimitDeferredError)) throw error;
     await scheduleOrderIntentRetry(options.prisma, {
       shopId: data.shopId,
@@ -298,10 +326,14 @@ async function processOrderReconciliation(
       current.nextAttemptAt.getTime() - now.getTime(),
     );
   }
-  if (
-    current.shop.status !== "ACTIVE" ||
-    !hasScope(current.shop.grantedScopes, "read_orders")
-  ) {
+  if (current.shop.status === "UNINSTALLED") {
+    await cancelOrderIntentForUninstall(options.prisma, {
+      shopId: data.shopId,
+      orderIntentId,
+    });
+    return { status: "cancelled" as const, orderIntentId };
+  }
+  if (!hasShopifyScope(current.shop.grantedScopes, "read_orders")) {
     const delayMs = 15 * 60 * 1000;
     await releaseOrderIntentReconciliation(options.prisma, {
       shopId: data.shopId,
@@ -330,7 +362,12 @@ async function processOrderReconciliation(
       "Shopify authentication is temporarily unavailable.",
     );
   }
-  const rateLimitedAdmin = withShopifyRateGate(admin, {
+  const guardedAdmin = withShopCapabilityGuard(admin, {
+    prisma: options.prisma,
+    shopId: data.shopId,
+    requiredScope: "read_orders",
+  });
+  const rateLimitedAdmin = withShopifyRateGate(guardedAdmin, {
     rateGate: options.rateGate,
     shopId: data.shopId,
     estimatedCost: options.orderReconcileEstimatedCost,
@@ -386,6 +423,22 @@ async function processOrderReconciliation(
         : "The Shopify order is not visible yet; reconciliation will retry.",
     );
   } catch (error) {
+    if (error instanceof ShopCapabilityError) {
+      if (error.reason === "uninstalled") {
+        await cancelOrderIntentForUninstall(options.prisma, {
+          shopId: data.shopId,
+          orderIntentId,
+        });
+        return { status: "cancelled" as const, orderIntentId };
+      }
+      await releaseOrderIntentReconciliation(options.prisma, {
+        shopId: data.shopId,
+        orderIntentId,
+        message: "Order reconciliation is paused until read_orders is granted.",
+        nextAttemptAt: new Date(now.getTime() + 15 * 60 * 1000),
+      });
+      throw new OrderWorkDeferredError(15 * 60 * 1000);
+    }
     if (!(error instanceof ShopifyRateLimitDeferredError)) throw error;
     await releaseOrderIntentReconciliation(options.prisma, {
       shopId: data.shopId,
@@ -423,15 +476,6 @@ async function getAdmin(options: OrderProcessorOptions, shopDomain: string) {
 function retryDelay(attempt: number, random: (() => number) | undefined) {
   const base = Math.min(60_000, 1_000 * 2 ** Math.max(0, attempt - 1));
   return base + Math.floor((random?.() ?? Math.random()) * 500);
-}
-
-function hasScope(scopes: string | null, required: string) {
-  return new Set(
-    (scopes ?? "")
-      .split(",")
-      .map((scope) => scope.trim())
-      .filter(Boolean),
-  ).has(required);
 }
 
 function log(

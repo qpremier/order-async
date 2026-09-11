@@ -12,6 +12,8 @@ Phase 4 adds the draft import domain and embedded merchant workflow. It intentio
 
 Phase 5 established asynchronous order creation, controlled order state transitions, a shared per-shop Shopify rate gate, and ambiguity reconciliation. It intentionally stops before Phase 6 status polling, dead-letter records, Needs Attention UI, controlled replay, and strengthened uninstall/scope webhook behavior.
 
+Phase 6 established database-only status polling, durable failure review and replay, and lifecycle-webhook capability gates. It intentionally stops before Phase 7 hardening, sample artifacts, failure-injection helpers, expanded operations documentation, and CI.
+
 ## Current Baseline
 
 The repository is still close to the Shopify React Router template:
@@ -306,6 +308,31 @@ Phase 5 scope boundaries:
 - APP_UNINSTALLED and APP_SCOPES_UPDATE webhook behavior is not strengthened in this phase; workers do perform an immediate capability check before Shopify calls.
 - Final sample CSVs, failure-injection helpers, expanded operations docs, and CI remain Phase 7 work.
 
+## Phase 6 Implementation Notes
+
+Completed status, webhook-safety, and dead-letter changes:
+
+- Added an authenticated local import-status resource route at `/app/api/imports/:batchId/status`. It derives tenant scope from the Shopify session, reads PostgreSQL only, returns progress/version data without PII, emits a strong ETag, and honors `If-None-Match` with `304 Not Modified`.
+- Added adaptive Import Details polling that backs off after unchanged versions, prevents overlapping requests, aborts while the document is hidden, resumes when visible, and stops for terminal import states.
+- Made permanent order failures create a `DeadLetterRecord` in the same transaction as the `DEAD_LETTER` transition and linked batch refresh. The Phase 1 schema already contained the required table, so Phase 6 requires no Prisma migration.
+- Added a keyset-paginated Needs Attention page for mapping failures, permanent failures, and final ambiguous results. The page exposes only sanitized operational errors and links back to the tenant-scoped import.
+- Added controlled dead-letter replay that reuses the same `OrderIntent`, verifies the shop capability and current active variant mappings, records the replay actor/time, preserves the old failure record, and inserts a new outbox event atomically.
+- Added a safe merchant-triggered ambiguity recheck. It queues only `order.reconcile-ambiguous`; it never converts an inconclusive write into a blind `orderCreate` retry.
+- Changed order-create, reconciliation, and replay BullMQ delivery IDs to use the durable outbox event ID. Duplicate publication of one event is still harmless, while a separately authorized replay can receive a new transport identity. Database state transitions remain the primary business-idempotency guard.
+- Added deduplicated `APP_UNINSTALLED` and `APP_SCOPES_UPDATE` ingestion. The HTTP transaction records a receipt, updates the immediate shop/session capability state, inserts minimal maintenance work, and returns without Shopify API calls.
+- Added asynchronous lifecycle cleanup that cancels active imports and catalog sync runs after uninstall, pauses queued order work without consuming attempts when `write_orders` is absent, and creates fresh outbox work when required scopes are restored.
+- Added a database-backed capability guard immediately before each worker GraphQL call. Uninstalled shops are blocked from order and catalog calls; missing order scopes defer work, and the embedded shell displays the reauthorization state.
+- Added Phase 6 tests for ETags and local-only status responses, terminal polling behavior, durable dead-letter creation, replay identity/idempotency, ambiguity rechecks, duplicate lifecycle webhooks, scope removal/restoration, and uninstall cancellation/API blocking.
+
+Phase 6 dependency and migration changes:
+
+- No dependencies were added or removed.
+- No Prisma migration was added because `WebhookReceipt`, `DeadLetterRecord`, lifecycle enums, replay fields, and the required indexes were already checked in during Phase 1.
+
+Phase 6 scope boundaries:
+
+- Phase 7 sample CSVs, failure-injection helpers, end-to-end coverage, CI, correlation IDs, and expanded operational/portfolio documentation are not included.
+
 ## Phased Roadmap
 
 Phase 1 - PostgreSQL foundation:
@@ -334,7 +361,7 @@ Phase 5 - Order creation pipeline:
 
 Phase 6 - Status polling, webhook safety, and dead letter:
 
-- Add local status APIs, adaptive polling, webhook receipts, uninstall/scope handling, dead-letter records, Needs Attention, and controlled replay.
+- Completed in Phase 6: local ETag status APIs, adaptive polling, lifecycle webhook receipts and cleanup, per-call worker capability guards, durable dead-letter history, keyset-paginated Needs Attention, and controlled replay/reconciliation.
 
 Phase 7 - Hardening and portfolio documentation:
 

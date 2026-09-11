@@ -1,24 +1,39 @@
 import { Outlet, useLoaderData, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
+import db from "../db.server";
+import { syncAuthenticatedShop } from "../services/shops/shop-capabilities.server";
 import { authenticate } from "../shopify.server";
 
 export const loader = async ({ request }) => {
-  await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
+  const shop = await syncAuthenticatedShop(db, {
+    shopDomain: session.shop,
+    grantedScopes: session.scope,
+  });
 
-  // eslint-disable-next-line no-undef
-  return { apiKey: process.env.SHOPIFY_API_KEY || "" };
+  return {
+    // eslint-disable-next-line no-undef
+    apiKey: process.env.SHOPIFY_API_KEY || "",
+    needsReauth: shop.status === "NEEDS_REAUTH",
+  };
 };
 
 export default function App() {
-  const { apiKey } = useLoaderData();
+  const { apiKey, needsReauth } = useLoaderData();
 
   return (
     <AppProvider embedded apiKey={apiKey}>
       <s-app-nav>
         <s-link href="/app">Home</s-link>
         <s-link href="/app/imports/new">New import</s-link>
+        <s-link href="/app/needs-attention">Needs attention</s-link>
       </s-app-nav>
+      {needsReauth && (
+        <s-banner heading="Order access needs authorization" tone="warning">
+          Order creation is paused until the app has the write_orders scope.
+        </s-banner>
+      )}
       <Outlet />
     </AppProvider>
   );

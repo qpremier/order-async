@@ -19,6 +19,10 @@ import {
   ShopifyRateGate,
   withShopifyRateGate,
 } from "../../app/services/shopify/shopify-rate-gate.server.js";
+import {
+  hasShopifyScope,
+  withShopCapabilityGuard,
+} from "../../app/services/shops/shop-capabilities.server.js";
 
 const catalogBootstrapPayloadSchema = z.object({
   syncRunId: z.string().min(1),
@@ -91,17 +95,30 @@ async function processCatalogBootstrapJob(
     select: {
       id: true,
       domain: true,
+      status: true,
+      grantedScopes: true,
     },
   });
+  if (
+    shop.status === "UNINSTALLED" ||
+    !hasShopifyScope(shop.grantedScopes, "read_products")
+  ) {
+    return { status: "blocked", eventId: data.eventId, processedVariants: 0 };
+  }
   const { admin: rawAdmin } = await getUnauthenticatedAdmin(shop.domain);
+  const guardedAdmin = withShopCapabilityGuard(rawAdmin, {
+    prisma: options.prisma,
+    shopId: shop.id,
+    requiredScope: "read_products",
+  });
   const admin = options.rateGate
-    ? withShopifyRateGate(rawAdmin, {
+    ? withShopifyRateGate(guardedAdmin, {
         rateGate: options.rateGate,
         shopId: shop.id,
         estimatedCost: options.estimatedQueryCost ?? 50,
         priority: "background",
       })
-    : rawAdmin;
+    : guardedAdmin;
   const result = await runFullCatalogSync({
     prisma: options.prisma,
     shopId: shop.id,
@@ -139,17 +156,30 @@ async function processCatalogRefreshProductJob(
     select: {
       id: true,
       domain: true,
+      status: true,
+      grantedScopes: true,
     },
   });
+  if (
+    shop.status === "UNINSTALLED" ||
+    !hasShopifyScope(shop.grantedScopes, "read_products")
+  ) {
+    return { status: "blocked", eventId: data.eventId, processedVariants: 0 };
+  }
   const { admin: rawAdmin } = await getUnauthenticatedAdmin(shop.domain);
+  const guardedAdmin = withShopCapabilityGuard(rawAdmin, {
+    prisma: options.prisma,
+    shopId: shop.id,
+    requiredScope: "read_products",
+  });
   const admin = options.rateGate
-    ? withShopifyRateGate(rawAdmin, {
+    ? withShopifyRateGate(guardedAdmin, {
         rateGate: options.rateGate,
         shopId: shop.id,
         estimatedCost: options.estimatedQueryCost ?? 50,
         priority: "background",
       })
-    : rawAdmin;
+    : guardedAdmin;
   const result = await refreshCatalogProduct({
     prisma: options.prisma,
     shopId: shop.id,

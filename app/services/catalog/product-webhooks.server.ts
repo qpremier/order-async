@@ -52,8 +52,6 @@ export async function ingestProductWebhook(
         },
         update: {
           grantedScopes: input.grantedScopes ?? undefined,
-          status: "ACTIVE",
-          uninstalledAt: null,
         },
       });
 

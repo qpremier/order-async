@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import { Form, redirect, useActionData, useLoaderData } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import db from "../db.server";
@@ -9,6 +10,10 @@ import {
 import { applySkuMapping } from "../services/imports/sku-mapping.server";
 import { confirmImportBatch } from "../services/orders/order-state.server";
 import { InvalidCursorError } from "../services/pagination/cursor.server";
+import {
+  nextImportPollDelay,
+  shouldPollImport,
+} from "../services/imports/import-polling";
 import { authenticate } from "../shopify.server";
 
 const ORDER_PAGE_SIZE = 20;
@@ -151,16 +156,22 @@ export default function ImportDetails() {
   const { batch, intentsPage, candidates, cursor, variantQuery } =
     useLoaderData();
   const actionData = useActionData();
+  const liveStatus = useImportStatusPolling(batch);
 
   return (
     <s-page heading={`Import ${batch.originalFileName}`} inlineSize="base">
       <s-section heading="Preview">
         <s-stack direction="block" gap="base">
           <s-stack direction="inline" gap="base">
-            {renderMetric("Status", formatStatus(batch.status))}
-            {renderMetric("Orders", String(batch.totalOrders))}
-            {renderMetric("Ready", String(batch.readyOrders))}
-            {renderMetric("Needs mapping", String(batch.needsAttentionOrders))}
+            {renderMetric("Status", formatStatus(liveStatus.status))}
+            {renderMetric("Orders", String(liveStatus.counts.total))}
+            {renderMetric("Queued", String(liveStatus.counts.queued))}
+            {renderMetric("Processing", String(liveStatus.counts.processing))}
+            {renderMetric("Succeeded", String(liveStatus.counts.succeeded))}
+            {renderMetric(
+              "Needs attention",
+              String(liveStatus.counts.needsAttention),
+            )}
           </s-stack>
           <s-paragraph>
             Source: {batch.sourceSystem}. Uploaded{" "}
@@ -354,6 +365,111 @@ function formatDateTime(value) {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(value));
+}
+
+function useImportStatusPolling(batch) {
+  const initialStatus = toLiveStatus(batch);
+  const [status, setStatus] = useState(initialStatus);
+  const statusRef = useRef(initialStatus);
+  const etagRef = useRef(null);
+
+  useEffect(() => {
+    const nextInitialStatus = toLiveStatus(batch);
+    statusRef.current = nextInitialStatus;
+    setStatus(nextInitialStatus);
+    etagRef.current = null;
+
+    let disposed = false;
+    let inFlight = false;
+    let timer;
+    let unchangedResponses = 0;
+    let controller;
+
+    const schedule = (delay) => {
+      if (
+        disposed ||
+        document.visibilityState === "hidden" ||
+        !shouldPollImport(statusRef.current.status)
+      ) {
+        return;
+      }
+      window.clearTimeout(timer);
+      timer = window.setTimeout(poll, delay);
+    };
+
+    const poll = async () => {
+      if (disposed || inFlight || document.visibilityState === "hidden") return;
+      if (!shouldPollImport(statusRef.current.status)) return;
+
+      inFlight = true;
+      controller = new AbortController();
+      try {
+        const response = await fetch(`/app/api/imports/${batch.id}/status`, {
+          credentials: "same-origin",
+          headers: etagRef.current
+            ? { "If-None-Match": etagRef.current }
+            : undefined,
+          signal: controller.signal,
+        });
+        if (response.status === 304) {
+          unchangedResponses += 1;
+        } else if (response.ok) {
+          const nextStatus = await response.json();
+          const changed = nextStatus.version !== statusRef.current.version;
+          unchangedResponses = changed ? 0 : unchangedResponses + 1;
+          statusRef.current = nextStatus;
+          etagRef.current = response.headers.get("ETag");
+          setStatus(nextStatus);
+        } else {
+          unchangedResponses += 1;
+        }
+      } catch (error) {
+        if (error.name !== "AbortError") unchangedResponses += 1;
+      } finally {
+        inFlight = false;
+        schedule(nextImportPollDelay(unchangedResponses));
+      }
+    };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        window.clearTimeout(timer);
+        controller?.abort();
+      } else {
+        schedule(0);
+      }
+    };
+
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    schedule(nextImportPollDelay(0));
+
+    return () => {
+      disposed = true;
+      window.clearTimeout(timer);
+      controller?.abort();
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [batch]);
+
+  return status;
+}
+
+function toLiveStatus(batch) {
+  return {
+    id: batch.id,
+    status: batch.status,
+    version: batch.version,
+    counts: {
+      total: batch.totalOrders,
+      ready: batch.readyOrders,
+      queued: batch.queuedOrders,
+      processing: batch.processingOrders,
+      succeeded: batch.succeededOrders,
+      failed: batch.failedOrders,
+      needsAttention: batch.needsAttentionOrders,
+    },
+    updatedAt: batch.updatedAt,
+  };
 }
 
 export const headers = (headersArgs) => boundary.headers(headersArgs);

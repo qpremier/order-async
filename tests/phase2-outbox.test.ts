@@ -59,7 +59,7 @@ describe("Phase 2 queue job descriptors", () => {
     });
   });
 
-  it("uses the order intent aggregate as the future order-create dedupe key", () => {
+  it("uses the durable outbox event as the order-create delivery dedupe key", () => {
     const descriptor = describeOutboxJob(
       createOutboxEventFixture({
         eventType: OUTBOX_EVENT_TYPES.orderCreate,
@@ -70,7 +70,7 @@ describe("Phase 2 queue job descriptors", () => {
 
     expect(descriptor.queueName).toBe(QUEUE_NAMES.orderWrite);
     expect(descriptor.jobName).toBe(JOB_NAMES.orderCreate);
-    expect(descriptor.jobId).toBe("order-create__order-intent-1");
+    expect(descriptor.jobId).toBe("order-create__outbox-event-1");
   });
 });
 

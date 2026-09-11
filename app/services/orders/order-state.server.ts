@@ -60,6 +60,16 @@ export async function confirmImportBatch(
         status: 409,
       });
     }
+    const activeShop = await tx.shop.updateMany({
+      where: { id: input.shopId, status: "ACTIVE" },
+      data: { updatedAt: now },
+    });
+    if (activeShop.count !== 1) {
+      throw new ImportRequestError(
+        "Order creation is paused until the shop is active and authorized.",
+        { status: 409 },
+      );
+    }
 
     const intents = await tx.orderIntent.findMany({
       where: {
@@ -259,6 +269,34 @@ export async function scheduleOrderIntentRetry(
   );
 }
 
+export async function cancelOrderIntentForUninstall(
+  prisma: PrismaClient,
+  input: { shopId: string; orderIntentId: string; now?: Date },
+) {
+  return updateIntentAndBatches(prisma, input.orderIntentId, async (tx) =>
+    tx.orderIntent.updateMany({
+      where: {
+        id: input.orderIntentId,
+        shopId: input.shopId,
+        status: {
+          in: ["QUEUED", "PROCESSING", "RETRY_WAIT", "AMBIGUOUS_RESULT"],
+        },
+        shopifyOrderGid: null,
+      },
+      data: {
+        status: "CANCELLED",
+        lastErrorCategory: "SHOP_UNINSTALLED",
+        lastErrorCode: "APP_UNINSTALLED",
+        sanitizedLastError:
+          "Order work was cancelled because the app was uninstalled.",
+        processingStartedAt: null,
+        nextAttemptAt: null,
+        version: { increment: 1 },
+      },
+    }),
+  );
+}
+
 export async function markOrderIntentSucceeded(
   prisma: PrismaClient,
   input: {
@@ -305,10 +343,24 @@ export async function markOrderIntentPermanentFailure(
     category: ErrorCategory;
     code?: string | null;
     message: string;
+    jobType?: string;
+    now?: Date;
   },
 ) {
-  return updateIntentAndBatches(prisma, input.orderIntentId, async (tx) =>
-    tx.orderIntent.updateMany({
+  const now = input.now ?? new Date();
+  return prisma.$transaction(async (tx) => {
+    const intent = await tx.orderIntent.findFirst({
+      where: {
+        id: input.orderIntentId,
+        shopId: input.shopId,
+        status: "PROCESSING",
+        shopifyOrderGid: null,
+      },
+      select: { attemptCount: true },
+    });
+    if (!intent) return false;
+
+    const updated = await tx.orderIntent.updateMany({
       where: {
         id: input.orderIntentId,
         shopId: input.shopId,
@@ -324,8 +376,28 @@ export async function markOrderIntentPermanentFailure(
         nextAttemptAt: null,
         version: { increment: 1 },
       },
-    }),
-  );
+    });
+    if (updated.count !== 1) return false;
+
+    await tx.deadLetterRecord.create({
+      data: {
+        shopId: input.shopId,
+        orderIntentId: input.orderIntentId,
+        jobType: input.jobType ?? OUTBOX_EVENT_TYPES.orderCreate,
+        errorCategory: input.category,
+        errorCode: input.code ?? null,
+        sanitizedMessage: input.message
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 500),
+        attempts: intent.attemptCount,
+        firstFailedAt: now,
+        lastFailedAt: now,
+      },
+    });
+    await refreshLinkedBatches(tx, input.orderIntentId, now);
+    return true;
+  });
 }
 
 export async function markOrderIntentAmbiguous(
@@ -441,7 +513,7 @@ async function updateIntentAndBatches(
   });
 }
 
-async function refreshLinkedBatches(
+export async function refreshLinkedBatches(
   tx: TransactionClient,
   orderIntentId: string,
   now: Date,

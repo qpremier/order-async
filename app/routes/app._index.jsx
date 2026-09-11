@@ -11,6 +11,7 @@ import { requestCatalogFullSync } from "../services/catalog/catalog-sync-request
 import { listImportBatchesPage } from "../services/imports/import-domain.server";
 import { InvalidCursorError } from "../services/pagination/cursor.server";
 import { getEnvironment } from "../services/security/environment.server";
+import { syncAuthenticatedShop } from "../services/shops/shop-capabilities.server";
 import { authenticate } from "../shopify.server";
 
 const VARIANT_PAGE_SIZE = 10;
@@ -22,19 +23,9 @@ export const loader = async ({ request }) => {
   const url = new URL(request.url);
   const cursor = url.searchParams.get("cursor");
   const importCursor = url.searchParams.get("importCursor");
-  const shop = await db.shop.upsert({
-    where: {
-      domain: session.shop,
-    },
-    create: {
-      domain: session.shop,
-      grantedScopes: session.scope,
-    },
-    update: {
-      grantedScopes: session.scope,
-      status: "ACTIVE",
-      uninstalledAt: null,
-    },
+  const shop = await syncAuthenticatedShop(db, {
+    shopDomain: session.shop,
+    grantedScopes: session.scope,
   });
 
   try {

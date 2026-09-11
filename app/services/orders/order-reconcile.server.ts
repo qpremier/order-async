@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { RateLimitedGraphqlClient } from "../shopify/shopify-rate-gate.server.js";
+import { ShopCapabilityError } from "../shops/shop-capabilities.server.js";
 
 export const ORDER_RECONCILIATION_QUERY = `#graphql
   query OrderRelayReconcileOrder($query: String!) {
@@ -80,8 +81,9 @@ export async function reconcileShopifyOrder(
     };
   } catch (error) {
     if (
-      error instanceof Error &&
-      error.name === "ShopifyRateLimitDeferredError"
+      (error instanceof Error &&
+        error.name === "ShopifyRateLimitDeferredError") ||
+      error instanceof ShopCapabilityError
     ) {
       throw error;
     }

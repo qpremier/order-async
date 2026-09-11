@@ -1,6 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
 import { OUTBOX_EVENT_TYPES } from "../../queues/jobs.js";
 import { createOutboxEvent } from "../outbox/outbox.server.js";
+import { syncAuthenticatedShop } from "../shops/shop-capabilities.server.js";
 
 export interface CatalogSyncRequestResult {
   shopId: string;
@@ -19,21 +20,16 @@ export async function requestCatalogFullSync(
   },
 ): Promise<CatalogSyncRequestResult> {
   return prisma.$transaction(async (tx) => {
-    const shop = await tx.shop.upsert({
-      where: {
-        domain: input.shopDomain,
-      },
-      create: {
-        domain: input.shopDomain,
-        grantedScopes: input.grantedScopes,
-        catalogSyncStatus: "SYNCING",
-      },
-      update: {
-        grantedScopes: input.grantedScopes ?? undefined,
-        status: "ACTIVE",
-        uninstalledAt: null,
-        catalogSyncStatus: "SYNCING",
-      },
+    const shop = await syncAuthenticatedShop(tx, {
+      shopDomain: input.shopDomain,
+      grantedScopes: input.grantedScopes,
+    });
+    if (shop.status === "UNINSTALLED") {
+      throw new Error("Catalog sync is unavailable for an uninstalled shop");
+    }
+    await tx.shop.update({
+      where: { id: shop.id },
+      data: { catalogSyncStatus: "SYNCING" },
     });
 
     const existingRun = await tx.catalogSyncRun.findFirst({
