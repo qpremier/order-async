@@ -18,16 +18,32 @@ export default function App() {
   return (
     <div className={styles.index}>
       <div className={styles.content}>
-        <h1 className={styles.heading}>A short heading about [your app]</h1>
+        <h1 className={styles.heading}>Import external orders reliably</h1>
         <p className={styles.text}>
-          A tagline about [your app] that describes your value proposition.
+          OrderRelay validates CSV orders against your Shopify catalog and
+          creates them through a durable, trackable workflow.
         </p>
         {showForm && (
-          <Form className={styles.form} method="post" action="/auth/login">
+          <Form
+            className={styles.form}
+            method="post"
+            action="/auth/login"
+            reloadDocument
+          >
             <label className={styles.label}>
               <span>Shop domain</span>
-              <input className={styles.input} type="text" name="shop" />
-              <span>e.g: my-shop-domain.myshopify.com</span>
+              <input
+                className={styles.input}
+                type="text"
+                name="shop"
+                placeholder="my-store.myshopify.com"
+                autoComplete="url"
+                required
+              />
+              <span>
+                Use your permanent .myshopify.com domain, not your public
+                storefront URL.
+              </span>
             </label>
             <button className={styles.button} type="submit">
               Log in
@@ -36,16 +52,16 @@ export default function App() {
         )}
         <ul className={styles.list}>
           <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
+            <strong>Validate before creating</strong>. Catch malformed orders
+            and missing catalog mappings before they reach Shopify.
           </li>
           <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
+            <strong>Import asynchronously</strong>. Upload CSV orders without
+            waiting for every Shopify operation to finish in the browser.
           </li>
           <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
+            <strong>Recover safely</strong>. Track failures and reconcile
+            uncertain results without blindly creating duplicate orders.
           </li>
         </ul>
       </div>

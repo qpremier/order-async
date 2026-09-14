@@ -2,7 +2,7 @@
 
 client_id = "39cff4cd37fd3535f423479cfd9cf62a"
 name = "Order Sync"
-application_url = "https://example.com"
+application_url = "https://epic-reformat-chowder.ngrok-free.dev"
 embedded = true
 
 [access_scopes]
@@ -33,7 +33,7 @@ api_version = "2026-10"
   topics = [ "products/delete" ]
 
 [auth]
-redirect_urls = [ "https://example.com/api/auth" ]
+redirect_urls = [ "https://epic-reformat-chowder.ngrok-free.dev/auth/callback" ]
 
 [build]
 include_config_on_deploy = true

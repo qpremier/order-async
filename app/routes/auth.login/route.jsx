@@ -27,7 +27,7 @@ export default function Auth() {
   return (
     <AppProvider embedded={false}>
       <s-page>
-        <Form method="post">
+        <Form method="post" reloadDocument>
           <s-section heading="Log in">
             <s-text-field
               name="shop"
