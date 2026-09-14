@@ -198,6 +198,12 @@ export default function ImportDetails() {
     navigation.formData?.get("intent") === "catalog-sync";
   const isCatalogSyncing =
     catalogCache.status === "SYNCING" || isStartingCatalogSync;
+  const isSavingMapping =
+    navigation.state !== "idle" &&
+    navigation.formData?.get("intent") === "map-sku";
+  const mappingSkuInFlight = isSavingMapping
+    ? navigation.formData?.get("normalizedSku")
+    : null;
 
   return (
     <s-page heading={`Import ${batch.originalFileName}`} inlineSize="base">
@@ -348,7 +354,8 @@ export default function ImportDetails() {
                     <s-stack direction="block" gap="small">
                       <s-heading>{variant.productTitle}</s-heading>
                       <s-text>
-                        {variant.variantTitle || "Default variant"} · SKU {variant.sku || "not set"}
+                        {variant.variantTitle || "Default variant"} · SKU{" "}
+                        {variant.sku || "not set"}
                       </s-text>
                     </s-stack>
                   </s-box>
@@ -420,6 +427,8 @@ export default function ImportDetails() {
                           cursor,
                           variantQuery,
                           isCatalogSyncing,
+                          isSavingMapping,
+                          mappingSkuInFlight === line.normalizedSku,
                         )}
                     </s-stack>
                   </s-box>
@@ -446,8 +455,13 @@ function renderMappingForm(
   cursor,
   variantQuery,
   isCatalogSyncing,
+  isSavingMapping,
+  isSavingThisMapping,
 ) {
-  const mappingUnavailable = isCatalogSyncing || candidates.length === 0;
+  const mappingUnavailable =
+    isCatalogSyncing ||
+    candidates.length === 0 ||
+    (isSavingMapping && !isSavingThisMapping);
 
   return (
     <Form method="post">
@@ -455,32 +469,43 @@ function renderMappingForm(
       <input type="hidden" name="normalizedSku" value={line.normalizedSku} />
       <input type="hidden" name="cursor" value={cursor} />
       <input type="hidden" name="variantQuery" value={variantQuery} />
-      <s-stack direction="inline" gap="base" alignItems="end">
-        <s-select
-          label={`Map ${line.originalSku} to`}
-          name="shopifyVariantGid"
-          placeholder={
-            isCatalogSyncing
-              ? "Catalog sync in progress"
-              : candidates.length > 0
-                ? "Choose a Shopify variant"
-                : "No matching cached variants"
-          }
-          details="Choose the Shopify product variant represented by this external SKU."
-          disabled={mappingUnavailable}
-          required
-        >
-          {candidates.map((variant) => (
-            <s-option key={variant.id} value={variant.shopifyVariantGid}>
-              {variant.productTitle} —{" "}
-              {variant.variantTitle || "Default variant"} (
-              {variant.sku || "no SKU"})
-            </s-option>
-          ))}
-        </s-select>
-        <s-button type="submit" disabled={mappingUnavailable}>
-          Save mapping
-        </s-button>
+      <s-stack direction="block" gap="base">
+        <s-stack direction="inline" gap="base" alignItems="end">
+          <s-select
+            label={`Map ${line.originalSku} to`}
+            name="shopifyVariantGid"
+            placeholder={
+              isCatalogSyncing
+                ? "Catalog sync in progress"
+                : candidates.length > 0
+                  ? "Choose a Shopify variant"
+                  : "No matching cached variants"
+            }
+            details="Choose the Shopify product variant represented by this external SKU."
+            disabled={isSavingMapping || mappingUnavailable}
+            required
+          >
+            {candidates.map((variant) => (
+              <s-option key={variant.id} value={variant.shopifyVariantGid}>
+                {variant.productTitle} —{" "}
+                {variant.variantTitle || "Default variant"} (
+                {variant.sku || "no SKU"})
+              </s-option>
+            ))}
+          </s-select>
+          <s-button
+            type="submit"
+            disabled={mappingUnavailable}
+            {...(isSavingThisMapping ? { loading: true } : {})}
+          >
+            {isSavingThisMapping ? "Saving mapping" : "Save mapping"}
+          </s-button>
+        </s-stack>
+        {isSavingThisMapping && (
+          <s-banner heading="Saving mapping" tone="info">
+            Saving mapping and recalculating order readiness.
+          </s-banner>
+        )}
       </s-stack>
     </Form>
   );

@@ -83,7 +83,8 @@ export default function NewImport() {
     setIdempotencyKey(window.crypto.randomUUID());
   }, []);
 
-  const isSubmitting = navigation.state !== "idle";
+  const isSubmitting =
+    navigation.state !== "idle" && Boolean(navigation.formData?.get("file"));
 
   return (
     <s-page heading="New import" inlineSize="base">
@@ -103,6 +104,26 @@ export default function NewImport() {
                   </s-list-item>
                 ))}
               </s-unordered-list>
+            </s-banner>
+          )}
+
+          {isSubmitting && (
+            <s-banner heading="Preparing your import" tone="info">
+              <s-stack direction="block" gap="base">
+                <s-stack direction="inline" gap="base" alignItems="center">
+                  <s-spinner
+                    size="base"
+                    accessibilityLabel="Preparing import"
+                  ></s-spinner>
+                  <s-text>
+                    Keep this page open while the CSV is processed.
+                  </s-text>
+                </s-stack>
+                <s-paragraph>
+                  Uploading CSV → validating rows → checking existing orders →
+                  preparing preview.
+                </s-paragraph>
+              </s-stack>
             </s-banner>
           )}
 

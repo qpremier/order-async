@@ -1,4 +1,9 @@
-import { Outlet, useLoaderData, useRouteError } from "react-router";
+import {
+  isRouteErrorResponse,
+  Outlet,
+  useLoaderData,
+  useRouteError,
+} from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import db from "../db.server";
@@ -42,7 +47,40 @@ export default function App() {
 
 // Shopify needs React Router to catch some thrown responses, so that their headers are included in the response.
 export function ErrorBoundary() {
-  return boundary.error(useRouteError());
+  const error = useRouteError();
+
+  if (isRouteErrorResponse(error) && error.status === 401) {
+    return (
+      <s-page heading="Authentication needs to be refreshed" inlineSize="base">
+        <s-section>
+          <s-banner
+            heading="Session expired or system clock is incorrect"
+            tone="warning"
+          >
+            <s-stack direction="block" gap="base">
+              <s-paragraph>
+                Shopify could not verify this request. This can happen when the
+                short-lived session expires or this computer&apos;s date and
+                time are out of sync.
+              </s-paragraph>
+              <s-paragraph>
+                Turn on automatic date and time synchronization, then reload the
+                app and try the action again.
+              </s-paragraph>
+              <s-button
+                variant="primary"
+                onClick={() => window.location.reload()}
+              >
+                Reload app
+              </s-button>
+            </s-stack>
+          </s-banner>
+        </s-section>
+      </s-page>
+    );
+  }
+
+  return boundary.error(error);
 }
 
 export const headers = (headersArgs) => {
