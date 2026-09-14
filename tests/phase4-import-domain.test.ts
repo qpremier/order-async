@@ -4,6 +4,7 @@ import {
   createDraftImport,
   ExternalOrderConflictError,
   getImportDetails,
+  listMappingCandidates,
 } from "../app/services/imports/import-domain.server";
 import { parseImportCsv } from "../app/services/imports/import-parser.server";
 import { applySkuMapping } from "../app/services/imports/sku-mapping.server";
@@ -121,6 +122,25 @@ describeIfDatabase("Phase 4 import domain", () => {
     expect(secondPage?.intentsPage.items[0].id).not.toBe(
       firstPage?.intentsPage.items[0].id,
     );
+  });
+
+  it("finds mapping candidates by a numeric cached SKU", async () => {
+    const domain = shopDomain();
+    const shop = await prisma.shop.create({ data: { domain } });
+    const variant = await createVariant(prisma, shop.id, "1901743", "numeric");
+
+    const candidates = await listMappingCandidates(prisma, {
+      shopId: shop.id,
+      normalizedSkus: [],
+      query: "1901743",
+    });
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]).toMatchObject({
+      id: variant.id,
+      sku: "1901743",
+      normalizedSku: "1901743",
+    });
   });
 
   it("returns the original batch for repeated and concurrent idempotency keys", async () => {

@@ -54,14 +54,11 @@ export const loader = async ({ request, params }) => {
         ),
       ),
     ];
-    const candidates =
-      unresolvedSkus.length > 0
-        ? await listMappingCandidates(db, {
-            shopId: shop.id,
-            normalizedSkus: unresolvedSkus,
-            query: variantQuery,
-          })
-        : [];
+    const candidates = await listMappingCandidates(db, {
+      shopId: shop.id,
+      normalizedSkus: unresolvedSkus,
+      query: variantQuery,
+    });
     const catalogCache = await getCatalogCacheStatus(db, {
       shopId: shop.id,
       staleAfterMinutes: environment.CATALOG_STALE_AFTER_MINUTES,
@@ -288,6 +285,13 @@ export default function ImportDetails() {
               </s-paragraph>
             )}
 
+            {isCatalogSyncing && (
+              <s-banner heading="Catalog sync in progress" tone="info">
+                Search and mapping will become available automatically after
+                every Shopify variant has been cached.
+              </s-banner>
+            )}
+
             <Form method="post">
               <input type="hidden" name="intent" value="catalog-sync" />
               <s-button
@@ -301,7 +305,7 @@ export default function ImportDetails() {
               </s-button>
             </Form>
 
-            {catalogCache.activeVariantCount > 0 && (
+            {catalogCache.activeVariantCount > 0 && !isCatalogSyncing && (
               <Form method="get">
                 <input type="hidden" name="cursor" value={cursor} />
                 <s-stack direction="inline" gap="base" alignItems="end">
@@ -317,6 +321,7 @@ export default function ImportDetails() {
             )}
 
             {catalogCache.activeVariantCount > 0 &&
+              !isCatalogSyncing &&
               variantQuery &&
               candidates.length === 0 && (
                 <s-banner heading="No matching variants found" tone="info">
@@ -325,6 +330,31 @@ export default function ImportDetails() {
                   catalog.
                 </s-banner>
               )}
+
+            {!isCatalogSyncing && variantQuery && candidates.length > 0 && (
+              <s-stack direction="block" gap="small">
+                <s-banner heading="Matching variants found" tone="success">
+                  {candidates.length} Shopify variant(s) match “{variantQuery}”.
+                  If an order still needs mapping, choose the correct variant in
+                  its dropdown below.
+                </s-banner>
+                {candidates.map((variant) => (
+                  <s-box
+                    key={variant.id}
+                    padding="small"
+                    borderWidth="base"
+                    borderRadius="base"
+                  >
+                    <s-stack direction="block" gap="small">
+                      <s-heading>{variant.productTitle}</s-heading>
+                      <s-text>
+                        {variant.variantTitle || "Default variant"} · SKU {variant.sku || "not set"}
+                      </s-text>
+                    </s-stack>
+                  </s-box>
+                ))}
+              </s-stack>
+            )}
           </s-stack>
         </s-section>
       )}
@@ -389,6 +419,7 @@ export default function ImportDetails() {
                           candidates,
                           cursor,
                           variantQuery,
+                          isCatalogSyncing,
                         )}
                     </s-stack>
                   </s-box>
@@ -409,7 +440,15 @@ export default function ImportDetails() {
   );
 }
 
-function renderMappingForm(line, candidates, cursor, variantQuery) {
+function renderMappingForm(
+  line,
+  candidates,
+  cursor,
+  variantQuery,
+  isCatalogSyncing,
+) {
+  const mappingUnavailable = isCatalogSyncing || candidates.length === 0;
+
   return (
     <Form method="post">
       <input type="hidden" name="intent" value="map-sku" />
@@ -421,12 +460,14 @@ function renderMappingForm(line, candidates, cursor, variantQuery) {
           label={`Map ${line.originalSku} to`}
           name="shopifyVariantGid"
           placeholder={
-            candidates.length > 0
-              ? "Choose a Shopify variant"
-              : "No matching cached variants"
+            isCatalogSyncing
+              ? "Catalog sync in progress"
+              : candidates.length > 0
+                ? "Choose a Shopify variant"
+                : "No matching cached variants"
           }
           details="Choose the Shopify product variant represented by this external SKU."
-          disabled={candidates.length === 0}
+          disabled={mappingUnavailable}
           required
         >
           {candidates.map((variant) => (
@@ -437,7 +478,7 @@ function renderMappingForm(line, candidates, cursor, variantQuery) {
             </s-option>
           ))}
         </s-select>
-        <s-button type="submit" disabled={candidates.length === 0}>
+        <s-button type="submit" disabled={mappingUnavailable}>
           Save mapping
         </s-button>
       </s-stack>

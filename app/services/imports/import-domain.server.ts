@@ -359,6 +359,10 @@ export async function listMappingCandidates(
   },
 ) {
   const query = options.query?.trim().slice(0, 100);
+  if (options.normalizedSkus.length === 0 && !query) {
+    return [];
+  }
+
   const [matching, fallback] = await Promise.all([
     prisma.catalogVariant.findMany({
       where: {
@@ -380,6 +384,9 @@ export async function listMappingCandidates(
           ? {
               OR: [
                 { sku: { contains: query, mode: "insensitive" } },
+                {
+                  normalizedSku: { contains: query, mode: "insensitive" },
+                },
                 { productTitle: { contains: query, mode: "insensitive" } },
                 { variantTitle: { contains: query, mode: "insensitive" } },
               ],
