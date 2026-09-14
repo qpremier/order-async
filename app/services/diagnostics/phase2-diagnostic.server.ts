@@ -7,6 +7,7 @@ import { syncAuthenticatedShop } from "../shops/shop-capabilities.server.js";
 export interface CreatePhase2DiagnosticOutboxEventInput {
   shopDomain: string;
   grantedScopes?: string | null;
+  authenticatedSessionId?: string;
   idempotencyKey?: string | null;
   requestedAt?: Date;
 }
@@ -31,6 +32,7 @@ export async function createPhase2DiagnosticOutboxEvent(
     const shop = await syncAuthenticatedShop(tx, {
       shopDomain: input.shopDomain,
       grantedScopes: input.grantedScopes,
+      authenticatedSessionId: input.authenticatedSessionId,
     });
 
     const existingEvent = await tx.outboxEvent.findFirst({

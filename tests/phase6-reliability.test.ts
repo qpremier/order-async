@@ -114,6 +114,9 @@ describeIfDatabase("Phase 6 dead letter and webhook safety", () => {
   });
 
   afterEach(async () => {
+    await prisma.session.deleteMany({
+      where: { shop: { startsWith: "phase6-" } },
+    });
     await prisma.shop.deleteMany({
       where: { domain: { startsWith: "phase6-" } },
     });
@@ -367,6 +370,49 @@ describeIfDatabase("Phase 6 dead letter and webhook safety", () => {
     });
     expect(shop.status).toBe("UNINSTALLED");
     expect(batch.status).toBe("CANCELLED");
+  });
+
+  it("reactivates an uninstalled shop after Shopify persists a reinstall session", async () => {
+    const fixture = await createOrderFixture(prisma, "QUEUED");
+    const accepted = await ingestAppLifecycleWebhook(prisma, {
+      shopDomain: fixture.shopDomain,
+      topic: "APP_UNINSTALLED",
+      webhookId: "uninstall-before-reinstall",
+      payload: { id: 1 },
+      now: fixedNow,
+    });
+    if (accepted.status !== "accepted") throw new Error("expected accepted");
+
+    const sessionId = `offline_${fixture.shopDomain}`;
+    const missingSession = await syncAuthenticatedShop(prisma, {
+      shopDomain: fixture.shopDomain,
+      grantedScopes: "read_products,read_orders,write_orders",
+      authenticatedSessionId: sessionId,
+    });
+    expect(missingSession.status).toBe("UNINSTALLED");
+
+    await prisma.session.create({
+      data: {
+        id: sessionId,
+        shop: fixture.shopDomain,
+        state: "reinstalled",
+        isOnline: false,
+        scope: "read_products,read_orders,write_orders",
+        accessToken: "reinstall-test-token",
+      },
+    });
+
+    const reinstalled = await syncAuthenticatedShop(prisma, {
+      shopDomain: fixture.shopDomain,
+      grantedScopes: "read_products,read_orders,write_orders",
+      authenticatedSessionId: sessionId,
+    });
+
+    expect(reinstalled).toMatchObject({
+      status: "ACTIVE",
+      grantedScopes: "read_products,read_orders,write_orders",
+      uninstalledAt: null,
+    });
   });
 });
 

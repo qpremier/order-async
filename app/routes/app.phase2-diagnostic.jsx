@@ -8,6 +8,7 @@ export const action = async ({ request }) => {
   const result = await createPhase2DiagnosticOutboxEvent(db, {
     shopDomain: session.shop,
     grantedScopes: session.scope,
+    authenticatedSessionId: session.id,
     idempotencyKey,
   });
 

@@ -15,6 +15,7 @@ export async function requestCatalogFullSync(
   input: {
     shopDomain: string;
     grantedScopes?: string | null;
+    authenticatedSessionId?: string;
     requestedBy: "merchant" | "reconciliation";
     requestedAt?: Date;
   },
@@ -23,6 +24,7 @@ export async function requestCatalogFullSync(
     const shop = await syncAuthenticatedShop(tx, {
       shopDomain: input.shopDomain,
       grantedScopes: input.grantedScopes,
+      authenticatedSessionId: input.authenticatedSessionId,
     });
     if (shop.status === "UNINSTALLED") {
       throw new Error("Catalog sync is unavailable for an uninstalled shop");

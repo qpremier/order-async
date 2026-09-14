@@ -47,7 +47,11 @@ export function statusFromGrantedScopes(
 
 export async function syncAuthenticatedShop(
   prisma: PrismaClient | Prisma.TransactionClient,
-  input: { shopDomain: string; grantedScopes: string | null | undefined },
+  input: {
+    shopDomain: string;
+    grantedScopes: string | null | undefined;
+    authenticatedSessionId?: string;
+  },
 ) {
   const status = statusFromGrantedScopes(input.grantedScopes);
   const existing = await prisma.shop.findUnique({
@@ -65,10 +69,24 @@ export async function syncAuthenticatedShop(
     });
   }
 
-  // A request authenticated just before uninstall must not reactivate the shop
-  // after the uninstall transaction deletes its sessions.
+  // A persisted session with the exact ID returned by authenticate.admin is
+  // evidence that Shopify has installed the app again after an uninstall. A
+  // stale request or background task without that session must stay blocked.
+  const canReactivate =
+    existing.status === "UNINSTALLED" &&
+    Boolean(input.authenticatedSessionId) &&
+    (await prisma.session.count({
+      where: {
+        id: input.authenticatedSessionId,
+        shop: input.shopDomain,
+      },
+    })) > 0;
+
   await prisma.shop.updateMany({
-    where: { id: existing.id, status: { not: "UNINSTALLED" } },
+    where: {
+      id: existing.id,
+      ...(canReactivate ? {} : { status: { not: "UNINSTALLED" as const } }),
+    },
     data: {
       grantedScopes: input.grantedScopes,
       status,

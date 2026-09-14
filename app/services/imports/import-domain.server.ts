@@ -87,6 +87,7 @@ export async function createDraftImport(
   input: {
     shopDomain: string;
     grantedScopes?: string | null;
+    authenticatedSessionId?: string;
     sourceSystem: string;
     originalFileName: string;
     idempotencyKey: string;
@@ -100,6 +101,7 @@ export async function createDraftImport(
   const shop = await syncAuthenticatedShop(prisma, {
     shopDomain: input.shopDomain,
     grantedScopes: input.grantedScopes,
+    authenticatedSessionId: input.authenticatedSessionId,
   });
   if (shop.status === "UNINSTALLED") {
     throw new ImportRequestError(

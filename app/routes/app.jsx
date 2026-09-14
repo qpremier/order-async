@@ -10,6 +10,7 @@ export const loader = async ({ request }) => {
   const shop = await syncAuthenticatedShop(db, {
     shopDomain: session.shop,
     grantedScopes: session.scope,
+    authenticatedSessionId: session.id,
   });
 
   return {

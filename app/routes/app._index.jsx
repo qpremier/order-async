@@ -26,6 +26,7 @@ export const loader = async ({ request }) => {
   const shop = await syncAuthenticatedShop(db, {
     shopDomain: session.shop,
     grantedScopes: session.scope,
+    authenticatedSessionId: session.id,
   });
 
   try {
@@ -101,6 +102,7 @@ export const action = async ({ request }) => {
   const result = await requestCatalogFullSync(db, {
     shopDomain: session.shop,
     grantedScopes: session.scope,
+    authenticatedSessionId: session.id,
     requestedBy: "merchant",
   });
 

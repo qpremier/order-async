@@ -36,6 +36,12 @@ if (host === "localhost") {
 }
 
 export default defineConfig({
+  // Keep React, React DOM, and React Router on one module instance. If Vite
+  // discovers these dependencies in separate optimization passes, an embedded
+  // app can retain chunks from both passes and React hooks lose their renderer.
+  resolve: {
+    dedupe: ["react", "react-dom", "react-router"],
+  },
   server: {
     allowedHosts: [host],
     cors: {
@@ -53,6 +59,16 @@ export default defineConfig({
     assetsInlineLimit: 0,
   },
   optimizeDeps: {
-    include: ["@shopify/app-bridge-react"],
+    include: [
+      "react",
+      "react/jsx-runtime",
+      "react/jsx-dev-runtime",
+      "react-dom",
+      "react-dom/client",
+      "react-router",
+      "react-router/dom",
+      "@shopify/app-bridge-react",
+      "@shopify/shopify-app-react-router/react",
+    ],
   },
 });

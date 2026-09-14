@@ -1,7 +1,16 @@
 import { useEffect, useRef, useState } from "react";
-import { Form, redirect, useActionData, useLoaderData } from "react-router";
+import {
+  Form,
+  redirect,
+  useActionData,
+  useLoaderData,
+  useNavigation,
+  useRevalidator,
+} from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import db from "../db.server";
+import { getCatalogCacheStatus } from "../services/catalog/catalog-cache.server";
+import { requestCatalogFullSync } from "../services/catalog/catalog-sync-request.server";
 import {
   getImportDetails,
   ImportRequestError,
@@ -14,12 +23,14 @@ import {
   nextImportPollDelay,
   shouldPollImport,
 } from "../services/imports/import-polling";
+import { getEnvironment } from "../services/security/environment.server";
 import { authenticate } from "../shopify.server";
 
 const ORDER_PAGE_SIZE = 20;
 
 export const loader = async ({ request, params }) => {
   const { session } = await authenticate.admin(request);
+  const environment = getEnvironment();
   const shop = await db.shop.findUnique({ where: { domain: session.shop } });
   if (!shop) throw new Response("Import not found", { status: 404 });
 
@@ -51,6 +62,10 @@ export const loader = async ({ request, params }) => {
             query: variantQuery,
           })
         : [];
+    const catalogCache = await getCatalogCacheStatus(db, {
+      shopId: shop.id,
+      staleAfterMinutes: environment.CATALOG_STALE_AFTER_MINUTES,
+    });
 
     return {
       cursor: cursor ?? "",
@@ -88,6 +103,13 @@ export const loader = async ({ request, params }) => {
         variantTitle: variant.variantTitle,
         sku: variant.sku,
       })),
+      catalogCache: {
+        status: catalogCache.status,
+        activeVariantCount: catalogCache.activeVariantCount,
+        lastCatalogSyncAt:
+          catalogCache.lastCatalogSyncAt?.toISOString() ?? null,
+        isStale: catalogCache.isStale,
+      },
     };
   } catch (error) {
     if (error instanceof InvalidCursorError) {
@@ -104,11 +126,25 @@ export const action = async ({ request, params }) => {
 
   const formData = await request.formData();
   const actionIntent = formData.get("intent");
-  if (actionIntent !== "map-sku" && actionIntent !== "confirm-batch") {
+  if (
+    actionIntent !== "map-sku" &&
+    actionIntent !== "confirm-batch" &&
+    actionIntent !== "catalog-sync"
+  ) {
     throw new Response("Unsupported action", { status: 400 });
   }
 
   try {
+    if (actionIntent === "catalog-sync") {
+      await requestCatalogFullSync(db, {
+        shopDomain: session.shop,
+        grantedScopes: session.scope,
+        authenticatedSessionId: session.id,
+        requestedBy: "merchant",
+      });
+      return redirect(`/app/imports/${params.batchId}`);
+    }
+
     if (actionIntent === "confirm-batch") {
       await db.shop.update({
         where: { id: shop.id },
@@ -153,10 +189,18 @@ export const action = async ({ request, params }) => {
 };
 
 export default function ImportDetails() {
-  const { batch, intentsPage, candidates, cursor, variantQuery } =
+  const { batch, intentsPage, candidates, catalogCache, cursor, variantQuery } =
     useLoaderData();
   const actionData = useActionData();
+  const navigation = useNavigation();
   const liveStatus = useImportStatusPolling(batch);
+  useCatalogSyncPolling(catalogCache.status);
+
+  const isStartingCatalogSync =
+    navigation.state !== "idle" &&
+    navigation.formData?.get("intent") === "catalog-sync";
+  const isCatalogSyncing =
+    catalogCache.status === "SYNCING" || isStartingCatalogSync;
 
   return (
     <s-page heading={`Import ${batch.originalFileName}`} inlineSize="base">
@@ -191,20 +235,6 @@ export default function ImportDetails() {
               this draft while you resolve the remaining mappings.
             </s-banner>
           )}
-          {batch.needsAttentionOrders > 0 && (
-            <Form method="get">
-              <input type="hidden" name="cursor" value={cursor} />
-              <s-stack direction="inline" gap="base" alignItems="end">
-                <s-text-field
-                  label="Find mapping candidates"
-                  name="variantQuery"
-                  value={variantQuery}
-                  placeholder="Search product title or SKU"
-                ></s-text-field>
-                <s-button type="submit">Search catalog</s-button>
-              </s-stack>
-            </Form>
-          )}
           {batch.status === "DRAFT" &&
             batch.needsAttentionOrders === 0 &&
             batch.failedOrders === 0 && (
@@ -217,6 +247,87 @@ export default function ImportDetails() {
             )}
         </s-stack>
       </s-section>
+
+      {batch.needsAttentionOrders > 0 && (
+        <s-section heading="Product mappings">
+          <s-stack direction="block" gap="base">
+            <s-paragraph>
+              A mapping connects a SKU from this source system to the Shopify
+              product variant that should be placed on the order. The app
+              remembers the choice for future imports from {batch.sourceSystem}.
+            </s-paragraph>
+
+            <s-stack direction="inline" gap="base">
+              {renderMetric("Catalog", formatStatus(catalogCache.status))}
+              {renderMetric(
+                "Cached variants",
+                String(catalogCache.activeVariantCount),
+              )}
+            </s-stack>
+
+            {catalogCache.activeVariantCount === 0 ? (
+              <s-banner
+                heading="Sync your Shopify catalog first"
+                tone="warning"
+              >
+                Mapping candidates come from products and variants cached from
+                this Shopify store. The cache is currently empty.
+              </s-banner>
+            ) : catalogCache.isStale ? (
+              <s-banner
+                heading="The catalog cache may be out of date"
+                tone="warning"
+              >
+                Refresh it if you recently created or changed products in
+                Shopify.
+              </s-banner>
+            ) : (
+              <s-paragraph>
+                Last catalog sync:{" "}
+                {formatDateTime(catalogCache.lastCatalogSyncAt)}
+              </s-paragraph>
+            )}
+
+            <Form method="post">
+              <input type="hidden" name="intent" value="catalog-sync" />
+              <s-button
+                type="submit"
+                disabled={isCatalogSyncing}
+                {...(isCatalogSyncing ? { loading: true } : {})}
+              >
+                {catalogCache.activeVariantCount === 0
+                  ? "Sync catalog"
+                  : "Refresh catalog"}
+              </s-button>
+            </Form>
+
+            {catalogCache.activeVariantCount > 0 && (
+              <Form method="get">
+                <input type="hidden" name="cursor" value={cursor} />
+                <s-stack direction="inline" gap="base" alignItems="end">
+                  <s-text-field
+                    label="Find a Shopify product variant"
+                    name="variantQuery"
+                    value={variantQuery}
+                    placeholder="Search product title or SKU"
+                  ></s-text-field>
+                  <s-button type="submit">Search catalog</s-button>
+                </s-stack>
+              </Form>
+            )}
+
+            {catalogCache.activeVariantCount > 0 &&
+              variantQuery &&
+              candidates.length === 0 && (
+                <s-banner heading="No matching variants found" tone="info">
+                  Try another product title or SKU. If the product does not
+                  exist in Shopify, create it there and then refresh the
+                  catalog.
+                </s-banner>
+              )}
+          </s-stack>
+        </s-section>
+      )}
 
       <s-section heading="Orders">
         <s-stack direction="block" gap="base">
@@ -309,9 +420,15 @@ function renderMappingForm(line, candidates, cursor, variantQuery) {
         <s-select
           label={`Map ${line.originalSku} to`}
           name="shopifyVariantGid"
+          placeholder={
+            candidates.length > 0
+              ? "Choose a Shopify variant"
+              : "No matching cached variants"
+          }
+          details="Choose the Shopify product variant represented by this external SKU."
+          disabled={candidates.length === 0}
           required
         >
-          <s-option value="">Choose a cached variant</s-option>
           {candidates.map((variant) => (
             <s-option key={variant.id} value={variant.shopifyVariantGid}>
               {variant.productTitle} —{" "}
@@ -320,7 +437,9 @@ function renderMappingForm(line, candidates, cursor, variantQuery) {
             </s-option>
           ))}
         </s-select>
-        <s-button type="submit">Save mapping</s-button>
+        <s-button type="submit" disabled={candidates.length === 0}>
+          Save mapping
+        </s-button>
       </s-stack>
     </Form>
   );
@@ -452,6 +571,25 @@ function useImportStatusPolling(batch) {
   }, [batch]);
 
   return status;
+}
+
+function useCatalogSyncPolling(status) {
+  const revalidator = useRevalidator();
+
+  useEffect(() => {
+    if (status !== "SYNCING") return undefined;
+
+    const timer = window.setInterval(() => {
+      if (
+        document.visibilityState === "visible" &&
+        revalidator.state === "idle"
+      ) {
+        revalidator.revalidate();
+      }
+    }, 2_000);
+
+    return () => window.clearInterval(timer);
+  }, [status, revalidator]);
 }
 
 function toLiveStatus(batch) {

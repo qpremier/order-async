@@ -46,6 +46,7 @@ export const action = async ({ request }) => {
     const result = await createDraftImport(db, {
       shopDomain: session.shop,
       grantedScopes: session.scope,
+      authenticatedSessionId: session.id,
       sourceSystem,
       originalFileName: file.name,
       idempotencyKey,
