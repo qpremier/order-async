@@ -37,6 +37,26 @@ export function normalizeSku(sku: string | null | undefined): string | null {
   return normalized ? normalized : null;
 }
 
+/**
+ * Returns the catalog keys that are safe to consider equivalent to an
+ * imported SKU. Spreadsheet exports sometimes retain the leading apostrophe
+ * used to force an all-numeric value to text (for example, `'1901743`). That
+ * marker is not part of the merchant's numeric SKU.
+ *
+ * Only all-numeric values receive this alias. Meaningful punctuation on
+ * alphanumeric SKUs remains part of the SKU and therefore requires mapping.
+ */
+export function skuMatchKeys(sku: string | null | undefined): string[] {
+  const normalizedSku = normalizeSku(sku);
+  if (!normalizedSku) return [];
+
+  if (/^'\d+$/.test(normalizedSku)) {
+    return [normalizedSku, normalizedSku.slice(1)];
+  }
+
+  return [normalizedSku];
+}
+
 export async function getCatalogCacheStatus(
   prisma: PrismaClient,
   options: {
@@ -160,7 +180,7 @@ export async function resolveCatalogSku(
   const variants = await prisma.catalogVariant.findMany({
     where: {
       shopId: options.shopId,
-      normalizedSku,
+      normalizedSku: { in: skuMatchKeys(normalizedSku) },
       deletedAt: null,
     },
     orderBy: [{ productTitle: "asc" }, { variantTitle: "asc" }, { id: "asc" }],

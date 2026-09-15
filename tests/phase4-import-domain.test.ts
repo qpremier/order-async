@@ -1,6 +1,7 @@
 import { PrismaClient } from "@prisma/client";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
+  autoResolveDraftImportSkus,
   createDraftImport,
   ExternalOrderConflictError,
   getImportDetails,
@@ -56,6 +57,73 @@ describeIfDatabase("Phase 4 import domain", () => {
       ["missing-order", "NEEDS_MAPPING"],
       ["ready-order", "READY"],
     ]);
+  });
+
+  it("auto-matches the spreadsheet text marker on a numeric SKU", async () => {
+    const domain = shopDomain();
+    const shop = await prisma.shop.create({ data: { domain } });
+    const variant = await createVariant(prisma, shop.id, "1901743", "numeric");
+
+    const result = await createDraftImport(
+      prisma,
+      request(domain, await parseOrders([row("order-1", "'1901743")])),
+    );
+    const line = await prisma.orderLine.findFirstOrThrow({
+      where: { shopId: shop.id },
+    });
+
+    expect(result.batch).toMatchObject({
+      readyOrders: 1,
+      needsAttentionOrders: 0,
+    });
+    expect(line).toMatchObject({
+      originalSku: "'1901743",
+      normalizedSku: "'1901743",
+      shopifyVariantGid: variant.shopifyVariantGid,
+      validationStatus: "VALID",
+    });
+  });
+
+  it("rechecks unresolved drafts and leaves genuinely different SKUs for manual mapping", async () => {
+    const domain = shopDomain();
+    const shop = await prisma.shop.create({ data: { domain } });
+    const result = await createDraftImport(
+      prisma,
+      request(
+        domain,
+        await parseOrders([
+          row("matching-order", "'1901743"),
+          row("different-order", "1901743-DIFFERENT"),
+        ]),
+      ),
+    );
+    const variant = await createVariant(prisma, shop.id, "1901743", "numeric");
+
+    await expect(
+      autoResolveDraftImportSkus(prisma, {
+        shopId: shop.id,
+        batchId: result.batch.id,
+      }),
+    ).resolves.toEqual({ resolvedLineCount: 1 });
+
+    const intents = await prisma.orderIntent.findMany({
+      where: { shopId: shop.id },
+      orderBy: { externalOrderId: "asc" },
+      include: { orderLines: true },
+    });
+    expect(intents.map((intent) => intent.status)).toEqual([
+      "NEEDS_MAPPING",
+      "READY",
+    ]);
+    expect(intents[1].orderLines[0]).toMatchObject({
+      shopifyVariantGid: variant.shopifyVariantGid,
+      validationStatus: "VALID",
+    });
+    expect(
+      await prisma.importBatch.findUniqueOrThrow({
+        where: { id: result.batch.id },
+      }),
+    ).toMatchObject({ readyOrders: 1, needsAttentionOrders: 1 });
   });
 
   it("requires explicit mapping for duplicate catalog SKUs and then unblocks the order", async () => {

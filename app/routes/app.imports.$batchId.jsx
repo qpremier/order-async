@@ -12,6 +12,7 @@ import db from "../db.server";
 import { getCatalogCacheStatus } from "../services/catalog/catalog-cache.server";
 import { requestCatalogFullSync } from "../services/catalog/catalog-sync-request.server";
 import {
+  autoResolveDraftImportSkus,
   getImportDetails,
   ImportRequestError,
   listMappingCandidates,
@@ -37,6 +38,10 @@ export const loader = async ({ request, params }) => {
   const cursor = new URL(request.url).searchParams.get("cursor");
   const variantQuery = new URL(request.url).searchParams.get("variantQuery");
   try {
+    await autoResolveDraftImportSkus(db, {
+      shopId: shop.id,
+      batchId: params.batchId,
+    });
     const details = await getImportDetails(db, {
       shopId: shop.id,
       batchId: params.batchId,

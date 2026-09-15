@@ -12,6 +12,7 @@ import {
 } from "../pagination/cursor.server.js";
 import type { CanonicalImportOrder } from "./import-parser.server.js";
 import { syncAuthenticatedShop } from "../shops/shop-capabilities.server.js";
+import { skuMatchKeys } from "../catalog/catalog-cache.server.js";
 
 const sourceSystemSchema = z
   .string()
@@ -349,6 +350,113 @@ export async function getImportDetails(
   return { batch, intentsPage: toKeysetPage(records, options.first) };
 }
 
+export async function autoResolveDraftImportSkus(
+  prisma: PrismaClient,
+  options: { shopId: string; batchId: string },
+): Promise<{ resolvedLineCount: number }> {
+  return prisma.$transaction(async (tx) => {
+    const batch = await tx.importBatch.findFirst({
+      where: {
+        id: options.batchId,
+        shopId: options.shopId,
+        status: "DRAFT",
+      },
+      select: { id: true, sourceSystem: true },
+    });
+    if (!batch) return { resolvedLineCount: 0 };
+
+    const unresolvedLines = await tx.orderLine.findMany({
+      where: {
+        shopId: options.shopId,
+        validationStatus: { in: ["NEEDS_MAPPING", "AMBIGUOUS_MAPPING"] },
+        orderIntent: {
+          importBatchLinks: { some: { importBatchId: batch.id } },
+        },
+      },
+      select: {
+        id: true,
+        orderIntentId: true,
+        normalizedSku: true,
+        validationStatus: true,
+        shopifyVariantGid: true,
+      },
+    });
+    if (unresolvedLines.length === 0) return { resolvedLineCount: 0 };
+
+    const resolution = await loadSkuResolution(tx, {
+      shopId: options.shopId,
+      sourceSystem: batch.sourceSystem,
+      normalizedSkus: [
+        ...new Set(unresolvedLines.map((line) => line.normalizedSku)),
+      ],
+    });
+
+    const affectedIntentIds = new Set<string>();
+    let resolvedLineCount = 0;
+    for (const line of unresolvedLines) {
+      const resolved = resolveSku(line.normalizedSku, resolution);
+      if (
+        resolved.validationStatus === line.validationStatus &&
+        resolved.shopifyVariantGid === line.shopifyVariantGid
+      ) {
+        continue;
+      }
+
+      const updated = await tx.orderLine.updateMany({
+        where: {
+          id: line.id,
+          shopId: options.shopId,
+          validationStatus: { in: ["NEEDS_MAPPING", "AMBIGUOUS_MAPPING"] },
+        },
+        data: resolved,
+      });
+      if (updated.count === 1) {
+        affectedIntentIds.add(line.orderIntentId);
+        if (resolved.validationStatus === "VALID") resolvedLineCount += 1;
+      }
+    }
+
+    if (affectedIntentIds.size === 0) return { resolvedLineCount };
+
+    for (const orderIntentId of affectedIntentIds) {
+      const lines = await tx.orderLine.findMany({
+        where: { shopId: options.shopId, orderIntentId },
+        select: { validationStatus: true },
+      });
+      await tx.orderIntent.updateMany({
+        where: {
+          id: orderIntentId,
+          shopId: options.shopId,
+          status: { in: ["NEEDS_MAPPING", "AMBIGUOUS_MAPPING", "READY"] },
+        },
+        data: {
+          status: statusFromValidation(
+            lines.map((line) => line.validationStatus),
+          ),
+          version: { increment: 1 },
+        },
+      });
+    }
+
+    const linkedIntents = await tx.orderIntent.findMany({
+      where: {
+        shopId: options.shopId,
+        importBatchLinks: { some: { importBatchId: batch.id } },
+      },
+      select: { status: true },
+    });
+    await tx.importBatch.update({
+      where: { id: batch.id },
+      data: {
+        ...aggregateStatuses(linkedIntents.map((intent) => intent.status)),
+        version: { increment: 1 },
+      },
+    });
+
+    return { resolvedLineCount };
+  });
+}
+
 export async function listMappingCandidates(
   prisma: PrismaClient,
   options: {
@@ -363,12 +471,15 @@ export async function listMappingCandidates(
     return [];
   }
 
+  const matchingSkuKeys = [
+    ...new Set(options.normalizedSkus.flatMap((sku) => skuMatchKeys(sku))),
+  ];
   const [matching, fallback] = await Promise.all([
     prisma.catalogVariant.findMany({
       where: {
         shopId: options.shopId,
         deletedAt: null,
-        normalizedSku: { in: options.normalizedSkus },
+        normalizedSku: { in: matchingSkuKeys },
       },
       orderBy: [
         { productTitle: "asc" },
@@ -418,6 +529,9 @@ async function loadSkuResolution(
   tx: Prisma.TransactionClient,
   options: { shopId: string; sourceSystem: string; normalizedSkus: string[] },
 ): Promise<ResolutionMaps> {
+  const catalogSkuKeys = [
+    ...new Set(options.normalizedSkus.flatMap((sku) => skuMatchKeys(sku))),
+  ];
   const mappings = await tx.skuMapping.findMany({
     where: {
       shopId: options.shopId,
@@ -430,7 +544,7 @@ async function loadSkuResolution(
       shopId: options.shopId,
       deletedAt: null,
       OR: [
-        { normalizedSku: { in: options.normalizedSkus } },
+        { normalizedSku: { in: catalogSkuKeys } },
         {
           shopifyVariantGid: {
             in: mappings.map((mapping) => mapping.shopifyVariantGid),
@@ -442,11 +556,16 @@ async function loadSkuResolution(
   });
 
   const variantsBySku = new Map<string, Array<{ shopifyVariantGid: string }>>();
-  for (const variant of variants) {
-    if (!variant.normalizedSku) continue;
-    const values = variantsBySku.get(variant.normalizedSku) ?? [];
-    values.push(variant);
-    variantsBySku.set(variant.normalizedSku, values);
+  for (const importedSku of options.normalizedSkus) {
+    const matchingKeys = new Set(skuMatchKeys(importedSku));
+    variantsBySku.set(
+      importedSku,
+      variants.filter(
+        (variant) =>
+          variant.normalizedSku !== null &&
+          matchingKeys.has(variant.normalizedSku),
+      ),
+    );
   }
   return {
     mappingBySku: new Map(
@@ -466,20 +585,22 @@ function resolveLine(
   line: CanonicalImportOrder["lines"][number],
   resolution: ResolutionMaps,
 ) {
-  const mappedGid = resolution.mappingBySku.get(line.normalizedSku);
+  return { ...line, ...resolveSku(line.normalizedSku, resolution) };
+}
+
+function resolveSku(normalizedSku: string, resolution: ResolutionMaps) {
+  const mappedGid = resolution.mappingBySku.get(normalizedSku);
   if (mappedGid && resolution.activeVariantGids.has(mappedGid)) {
     return {
-      ...line,
       shopifyVariantGid: mappedGid,
       validationStatus: "VALID" as const,
       validationMessage: null,
     };
   }
 
-  const variants = resolution.variantsBySku.get(line.normalizedSku) ?? [];
+  const variants = resolution.variantsBySku.get(normalizedSku) ?? [];
   if (variants.length === 1) {
     return {
-      ...line,
       shopifyVariantGid: variants[0].shopifyVariantGid,
       validationStatus: "VALID" as const,
       validationMessage: null,
@@ -487,14 +608,12 @@ function resolveLine(
   }
   if (variants.length > 1) {
     return {
-      ...line,
       shopifyVariantGid: null,
       validationStatus: "AMBIGUOUS_MAPPING" as const,
       validationMessage: "Multiple active catalog variants use this SKU.",
     };
   }
   return {
-    ...line,
     shopifyVariantGid: null,
     validationStatus: "NEEDS_MAPPING" as const,
     validationMessage: "No active catalog variant matches this SKU.",
@@ -510,6 +629,25 @@ function statusFromLines(
     return "AMBIGUOUS_MAPPING";
   }
   if (lines.some((line) => line.validationStatus === "NEEDS_MAPPING")) {
+    return "NEEDS_MAPPING";
+  }
+  return "READY";
+}
+
+function statusFromValidation(
+  statuses: Array<
+    "UNVALIDATED" | "VALID" | "NEEDS_MAPPING" | "AMBIGUOUS_MAPPING" | "INVALID"
+  >,
+): OrderIntentStatus {
+  if (
+    statuses.some((status) => status === "INVALID" || status === "UNVALIDATED")
+  ) {
+    return "INVALID";
+  }
+  if (statuses.some((status) => status === "AMBIGUOUS_MAPPING")) {
+    return "AMBIGUOUS_MAPPING";
+  }
+  if (statuses.some((status) => status === "NEEDS_MAPPING")) {
     return "NEEDS_MAPPING";
   }
   return "READY";
