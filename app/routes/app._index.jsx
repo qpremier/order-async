@@ -9,6 +9,7 @@ import {
 } from "../services/catalog/catalog-cache.server";
 import { requestCatalogFullSync } from "../services/catalog/catalog-sync-request.server";
 import { listImportBatchesPage } from "../services/imports/import-domain.server";
+import { formatImportProgress } from "../services/imports/import-progress";
 import { InvalidCursorError } from "../services/pagination/cursor.server";
 import { getEnvironment } from "../services/security/environment.server";
 import { syncAuthenticatedShop } from "../services/shops/shop-capabilities.server";
@@ -75,6 +76,7 @@ export const loader = async ({ request }) => {
           status: batch.status,
           totalOrders: batch.totalOrders,
           readyOrders: batch.readyOrders,
+          succeededOrders: batch.succeededOrders,
           needsAttentionOrders: batch.needsAttentionOrders,
           createdAt: batch.createdAt.toISOString(),
         })),
@@ -206,7 +208,7 @@ export default function Index() {
                   </s-link>
                   <s-paragraph>
                     {batch.sourceSystem} · {formatStatus(batch.status)} ·{" "}
-                    {batch.readyOrders}/{batch.totalOrders} ready
+                    {formatImportProgress(batch)}
                   </s-paragraph>
                   {batch.needsAttentionOrders > 0 && (
                     <s-text>
