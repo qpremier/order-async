@@ -158,6 +158,22 @@ async function processOrderCreate(
     throw new OrderWorkDeferredError(capabilityDelayMs);
   }
 
+  const resourceReservation = await options.rateGate.reserveOrderCreate(
+    data.shopId,
+    data.eventId,
+  );
+  if (!resourceReservation.allowed) {
+    await deferOrderIntentWithoutClaim(options.prisma, {
+      shopId: data.shopId,
+      orderIntentId,
+      category: "THROTTLED",
+      code: "ORDER_CREATE_RESOURCE_GATE_DEFERRED",
+      message: "Order creation is waiting for Shopify's per-store order limit.",
+      nextAttemptAt: new Date(now.getTime() + resourceReservation.retryAfterMs),
+    });
+    throw new OrderWorkDeferredError(resourceReservation.retryAfterMs);
+  }
+
   const intent = await claimOrderIntentForProcessing(options.prisma, {
     shopId: data.shopId,
     orderIntentId,
@@ -264,8 +280,13 @@ async function processOrderCreate(
     return { status: "ambiguous" as const, orderIntentId };
   }
   if (result.outcome === "retry") {
-    const delayMs =
-      result.category === "THROTTLED"
+    const resourceLimitDelayMs =
+      result.code === "ORDER_CREATE_RESOURCE_THROTTLED"
+        ? await options.rateGate.activateOrderCreateLimit(data.shopId)
+        : 0;
+    const delayMs = result.retryAfterMs
+      ? Math.max(result.retryAfterMs, resourceLimitDelayMs)
+      : result.category === "THROTTLED"
         ? Math.max(options.reconciliationDelayMs, 1_000)
         : retryDelay(intent.attemptCount, options.random);
     await scheduleOrderIntentRetry(options.prisma, {

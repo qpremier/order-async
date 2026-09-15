@@ -36,7 +36,13 @@ export function hasShopifyScope(
   scopes: string | null | undefined,
   requiredScope: ShopifyCapability,
 ) {
-  return parseShopifyScopes(scopes).has(requiredScope);
+  const granted = parseShopifyScopes(scopes);
+  if (granted.has(requiredScope)) return true;
+
+  // Shopify write scopes include the matching read permission and may be
+  // returned without a separate read scope handle.
+  if (requiredScope === "read_orders") return granted.has("write_orders");
+  return false;
 }
 
 export function statusFromGrantedScopes(

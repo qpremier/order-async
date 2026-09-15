@@ -53,6 +53,66 @@ redis.call("PEXPIRE", key, 3600000)
 return 1
 `;
 
+const RESERVE_ORDER_CREATE_RESOURCE_SCRIPT = `
+-- order-create-resource-reserve
+local activeKey = KEYS[1]
+local reservationsKey = KEYS[2]
+local now = tonumber(ARGV[1])
+local reservationId = ARGV[2]
+local limit = tonumber(ARGV[3])
+local windowMs = tonumber(ARGV[4])
+local safetyMs = tonumber(ARGV[5])
+local ttlSeconds = tonumber(ARGV[6])
+
+if redis.call("EXISTS", activeKey) == 0 then
+  return { 1, 0 }
+end
+
+redis.call("EXPIRE", activeKey, ttlSeconds)
+redis.call("ZREMRANGEBYSCORE", reservationsKey, "-inf", now - windowMs)
+
+if redis.call("ZSCORE", reservationsKey, reservationId) then
+  return { 1, 0 }
+end
+
+local count = redis.call("ZCARD", reservationsKey)
+if count < limit then
+  redis.call("ZADD", reservationsKey, now, reservationId)
+  redis.call("EXPIRE", reservationsKey, ttlSeconds)
+  return { 1, 0 }
+end
+
+local oldest = redis.call("ZRANGE", reservationsKey, 0, 0, "WITHSCORES")
+local oldestAt = tonumber(oldest[2]) or now
+local waitMs = math.max(1, oldestAt + windowMs + safetyMs - now)
+return { 0, waitMs }
+`;
+
+const ACTIVATE_ORDER_CREATE_RESOURCE_SCRIPT = `
+-- order-create-resource-activate
+local activeKey = KEYS[1]
+local reservationsKey = KEYS[2]
+local now = tonumber(ARGV[1])
+local limit = tonumber(ARGV[2])
+local windowMs = tonumber(ARGV[3])
+local safetyMs = tonumber(ARGV[4])
+local ttlSeconds = tonumber(ARGV[5])
+
+redis.call("SET", activeKey, "1", "EX", ttlSeconds)
+redis.call("DEL", reservationsKey)
+for index = 1, limit do
+  redis.call("ZADD", reservationsKey, now, "observed:" .. now .. ":" .. index)
+end
+redis.call("EXPIRE", reservationsKey, ttlSeconds)
+
+return windowMs + safetyMs
+`;
+
+export const ORDER_CREATE_RESOURCE_LIMIT = 5;
+export const ORDER_CREATE_RESOURCE_WINDOW_MS = 60_000;
+const ORDER_CREATE_RESOURCE_SAFETY_MS = 1_000;
+const ORDER_CREATE_RESOURCE_TTL_SECONDS = 7 * 24 * 60 * 60;
+
 export type ShopifyRatePriority = "order" | "background";
 
 export interface ShopifyThrottleStatus {
@@ -67,6 +127,11 @@ export interface ShopifyRateReservation {
   currentlyAvailable: number;
   maximumAvailable: number;
   restoreRate: number;
+}
+
+export interface ShopifyOrderCreateReservation {
+  allowed: boolean;
+  retryAfterMs: number;
 }
 
 export interface ShopifyRateGateOptions {
@@ -148,8 +213,58 @@ export class ShopifyRateGate {
     );
   }
 
+  async reserveOrderCreate(
+    shopId: string,
+    reservationId: string,
+  ): Promise<ShopifyOrderCreateReservation> {
+    const raw = await this.redis.eval(
+      RESERVE_ORDER_CREATE_RESOURCE_SCRIPT,
+      2,
+      this.orderCreateActiveKey(shopId),
+      this.orderCreateReservationsKey(shopId),
+      this.now(),
+      reservationId,
+      ORDER_CREATE_RESOURCE_LIMIT,
+      ORDER_CREATE_RESOURCE_WINDOW_MS,
+      ORDER_CREATE_RESOURCE_SAFETY_MS,
+      ORDER_CREATE_RESOURCE_TTL_SECONDS,
+    );
+    const reservation = parseOrderCreateReservation(raw);
+    if (!reservation.allowed) {
+      reservation.retryAfterMs += Math.floor(this.jitter() * 250) + 50;
+    }
+    return reservation;
+  }
+
+  async activateOrderCreateLimit(shopId: string): Promise<number> {
+    const raw = await this.redis.eval(
+      ACTIVATE_ORDER_CREATE_RESOURCE_SCRIPT,
+      2,
+      this.orderCreateActiveKey(shopId),
+      this.orderCreateReservationsKey(shopId),
+      this.now(),
+      ORDER_CREATE_RESOURCE_LIMIT,
+      ORDER_CREATE_RESOURCE_WINDOW_MS,
+      ORDER_CREATE_RESOURCE_SAFETY_MS,
+      ORDER_CREATE_RESOURCE_TTL_SECONDS,
+    );
+    const retryAfterMs = toFiniteNumber(raw);
+    if (retryAfterMs === null) {
+      throw new Error("Redis returned an invalid order-create resource delay");
+    }
+    return Math.max(1, retryAfterMs);
+  }
+
   private key(shopId: string) {
     return `${this.keyPrefix}:${shopId}`;
+  }
+
+  private orderCreateActiveKey(shopId: string) {
+    return `${this.keyPrefix}:order-create-resource-active:${shopId}`;
+  }
+
+  private orderCreateReservationsKey(shopId: string) {
+    return `${this.keyPrefix}:order-create-resource-reservations:${shopId}`;
   }
 }
 
@@ -263,6 +378,18 @@ function parseReservation(value: unknown): ShopifyRateReservation {
     currentlyAvailable: toFiniteNumber(value[2]) ?? 0,
     maximumAvailable: toFiniteNumber(value[3]) ?? 0,
     restoreRate: toFiniteNumber(value[4]) ?? 0,
+  };
+}
+
+function parseOrderCreateReservation(
+  value: unknown,
+): ShopifyOrderCreateReservation {
+  if (!Array.isArray(value) || value.length < 2) {
+    throw new Error("Redis returned an invalid order-create reservation");
+  }
+  return {
+    allowed: toFiniteNumber(value[0]) === 1,
+    retryAfterMs: Math.max(0, toFiniteNumber(value[1]) ?? 0),
   };
 }
 

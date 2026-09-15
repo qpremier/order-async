@@ -91,12 +91,12 @@ Docker entry points:
 - Redirect URL: placeholder `https://example.com/api/auth`
 - Configured app-specific webhook API version: `2026-10`
 - App/codegen API constant: `ApiVersion.July26` in `app/shopify.server.js` and `.graphqlrc.js`
-- Current scopes: `read_products,read_orders,write_orders`
+- Current scopes: `read_products,write_orders` (`write_orders` includes read access).
 - The template demo product/metaobject scopes and declarative custom data were removed in Phase 5 because the OrderRelay UI no longer uses them.
 
 The webhook API version and code API constant should be aligned in a later phase after confirming the supported enum in the installed Shopify package and the intended Shopify API release. Do not change this during Phase 0.
 
-Phase 5 validated [`orderCreate(OrderCreateOrderInput!)`](https://shopify.dev/docs/api/admin-graphql/2026-07/mutations/orderCreate) and the [`orders`](https://shopify.dev/docs/api/admin-graphql/2026-07/queries/orders) `source_identifier` reconciliation filter against the configured 2026-07 Admin GraphQL schema. The minimum app capabilities used by this implementation are `read_products`, `write_orders`, and `read_orders`. The shared gate consumes the documented [GraphQL cost and throttle status extensions](https://shopify.dev/docs/api/admin-graphql/2026-07#rate-limits).
+Phase 5 validated [`orderCreate(OrderCreateOrderInput!)`](https://shopify.dev/docs/api/admin-graphql/2026-07/mutations/orderCreate) and the [`orders`](https://shopify.dev/docs/api/admin-graphql/2026-07/queries/orders) `source_identifier` reconciliation filter against the configured 2026-07 Admin GraphQL schema. The minimum app capabilities used by this implementation are `read_products` and `write_orders`; Shopify write scopes include matching read access. The shared gate consumes the documented [GraphQL cost and throttle status extensions](https://shopify.dev/docs/api/admin-graphql/2026-07#rate-limits), and an adaptive per-shop resource gate handles the separate five-orders-per-minute development/trial-store limit.
 
 ## Current Verification Results
 

@@ -82,6 +82,7 @@ module.exports = {
         ".eslintrc.cjs",
         "vite.config.{js,ts}",
         "vitest.config.{js,ts}",
+        "react-router.config.{js,ts}",
         ".graphqlrc.{js,ts}",
         "shopify.server.{js,ts}",
         "**/*.server.{js,ts}",

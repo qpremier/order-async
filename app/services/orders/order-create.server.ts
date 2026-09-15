@@ -62,6 +62,7 @@ export type ShopifyOrderCreateResult =
       category: "THROTTLED" | "SHOPIFY_SERVER_TRANSIENT";
       code: string;
       message: string;
+      retryAfterMs?: number;
     }
   | { outcome: "ambiguous"; code: string; message: string };
 
@@ -121,6 +122,18 @@ export async function createShopifyOrder(
   if (topLevelError) return topLevelError;
 
   const payload = parsed.data.data?.orderCreate;
+  const resourceThrottle = payload?.userErrors.find((error) =>
+    isOrderCreateResourceThrottle(error.message),
+  );
+  if (resourceThrottle) {
+    return {
+      outcome: "retry",
+      category: "THROTTLED",
+      code: "ORDER_CREATE_RESOURCE_THROTTLED",
+      message: sanitizeShopifyMessage(resourceThrottle.message),
+      retryAfterMs: 60_000,
+    };
+  }
   const userError = payload?.userErrors[0];
   if (userError) {
     return {
@@ -144,6 +157,12 @@ export async function createShopifyOrder(
     orderGid: payload.order.id,
     orderName: payload.order.name,
   };
+}
+
+export function isOrderCreateResourceThrottle(message: string) {
+  return /too many attempts[.!]?\s*please try again later[.!]?/i.test(
+    message.trim(),
+  );
 }
 
 export function buildOrderCreateInput(intent: OrderIntentForCreate) {

@@ -348,8 +348,11 @@ function processorOptions(
     options?: { variables?: Record<string, unknown> },
   ) => Promise<{ json(): Promise<unknown> }>,
 ): OrderProcessorOptions {
-  const evalMock = async (script: string) =>
-    script.includes("return { allowed") ? [1, 0, 80, 100, 2] : 1;
+  const evalMock = async (script: string) => {
+    if (script.includes("order-create-resource-reserve")) return [1, 0];
+    if (script.includes("order-create-resource-activate")) return 61_000;
+    return script.includes("return { allowed") ? [1, 0, 80, 100, 2] : 1;
+  };
 
   return {
     prisma,

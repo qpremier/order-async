@@ -216,6 +216,53 @@ describeIfDatabase("Phase 5 order pipeline", () => {
     });
   });
 
+  it("retries the development-store order resource limit without dead-lettering", async () => {
+    const fixture = await queuedImport(prisma);
+    const graphql = vi.fn().mockResolvedValue(
+      response({
+        data: {
+          orderCreate: {
+            order: null,
+            userErrors: [
+              {
+                field: null,
+                message: "Too many attempts. Please try again later.",
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    await expect(
+      processOrderJob(
+        job(JOB_NAMES.orderCreate, fixture),
+        processorOptions(prisma, graphql),
+      ),
+    ).rejects.toMatchObject({
+      name: "OrderWorkDeferredError",
+      retryAfterMs: 61_000,
+    });
+
+    expect(
+      await prisma.orderIntent.findUniqueOrThrow({
+        where: { id: fixture.orderIntentId },
+      }),
+    ).toMatchObject({
+      status: "RETRY_WAIT",
+      attemptCount: 1,
+      lastErrorCategory: "THROTTLED",
+      lastErrorCode: "ORDER_CREATE_RESOURCE_THROTTLED",
+      sanitizedLastError: "Too many attempts. Please try again later.",
+      nextAttemptAt: new Date("2026-09-11T00:01:01.000Z"),
+    });
+    expect(
+      await prisma.deadLetterRecord.count({
+        where: { orderIntentId: fixture.orderIntentId },
+      }),
+    ).toBe(0);
+  });
+
   it("delays Shopify throttling without dead-lettering", async () => {
     const fixture = await queuedImport(prisma);
     const graphql = vi.fn().mockResolvedValue(
@@ -290,6 +337,10 @@ describeIfDatabase("Phase 5 order pipeline", () => {
 
   it("reconciles exactly one matching order without another create", async () => {
     const fixture = await ambiguousImport(prisma);
+    await prisma.shop.update({
+      where: { id: fixture.shopId },
+      data: { grantedScopes: "read_products,write_orders" },
+    });
     const graphql = vi.fn().mockResolvedValue(
       response({
         data: {
@@ -455,6 +506,46 @@ describeIfRedis("Phase 5 Shopify Redis rate gate", () => {
     );
   });
 
+  it("enforces a shared five-order rolling window after Shopify reports the resource limit", async () => {
+    const gate = createRedisGate({
+      maximum: 100,
+      restoreRate: 10,
+      margin: 0.8,
+    });
+
+    expect(
+      await gate.reserveOrderCreate("shop-a", "before-activation"),
+    ).toMatchObject({ allowed: true });
+    expect(await gate.activateOrderCreateLimit("shop-a")).toBe(61_000);
+    expect(
+      await gate.reserveOrderCreate("shop-a", "during-cooldown"),
+    ).toMatchObject({ allowed: false, retryAfterMs: 61_050 });
+    expect(await gate.reserveOrderCreate("shop-b", "other-shop")).toMatchObject(
+      { allowed: true },
+    );
+
+    now += 61_000;
+    const reservations = await Promise.all(
+      Array.from({ length: 6 }, (_, index) =>
+        gate.reserveOrderCreate("shop-a", `next-window-${index}`),
+      ),
+    );
+    expect(
+      reservations.filter((reservation) => reservation.allowed),
+    ).toHaveLength(5);
+    expect(
+      reservations.filter((reservation) => !reservation.allowed),
+    ).toHaveLength(1);
+    expect(
+      await gate.reserveOrderCreate("shop-a", "next-window-0"),
+    ).toMatchObject({ allowed: true });
+
+    now += 61_000;
+    expect(
+      await gate.reserveOrderCreate("shop-a", "following-window"),
+    ).toMatchObject({ allowed: true });
+  });
+
   function createRedisGate(input: {
     maximum: number;
     restoreRate: number;
@@ -478,9 +569,11 @@ function processorOptions(
   prisma: PrismaClient,
   graphql: ReturnType<typeof vi.fn>,
 ): OrderProcessorOptions {
-  const evalMock = vi.fn(async (script: string) =>
-    script.includes("return { allowed") ? [1, 0, 80, 100, 2] : 1,
-  );
+  const evalMock = vi.fn(async (script: string) => {
+    if (script.includes("order-create-resource-reserve")) return [1, 0];
+    if (script.includes("order-create-resource-activate")) return 61_000;
+    return script.includes("return { allowed") ? [1, 0, 80, 100, 2] : 1;
+  });
   return {
     prisma,
     rateGate: new ShopifyRateGate({

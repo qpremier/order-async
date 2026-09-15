@@ -41,21 +41,21 @@ Never add customer email, shipping data, raw rows, access tokens, session object
 
 ## Error Categories
 
-| Category                   | Operational treatment                                                                            |
-| -------------------------- | ------------------------------------------------------------------------------------------------ |
-| `VALIDATION`               | No automatic retry; return bounded, merchant-correctable feedback.                               |
-| `MISSING_MAPPING`          | Block only the affected intent until a valid mapping is selected.                                |
-| `AMBIGUOUS_MAPPING`        | Require an explicit variant selection because SKU is not unique.                                 |
-| `SHOPIFY_USER_ERROR`       | Treat as permanent, sanitize the message, create dead-letter history, and show Needs Attention.  |
-| `AUTHENTICATION`           | Retry when offline Admin access is temporarily unavailable; do not expose credentials.           |
-| `MISSING_SCOPE`            | Pause without exhausting attempts; resume only after lifecycle state records the restored scope. |
-| `SHOP_UNINSTALLED`         | Cancel active local work and prevent further Shopify calls.                                      |
-| `THROTTLED`                | Delay through the per-shop cost gate; never dead-letter solely for throttling.                   |
-| `NETWORK_TRANSIENT`        | Retry only when failure is known to be before write dispatch.                                    |
-| `SHOPIFY_SERVER_TRANSIENT` | Retry safe reads; treat inconclusive writes conservatively.                                      |
-| `AMBIGUOUS_WRITE_RESULT`   | Never blind-retry `orderCreate`; perform bounded read-only reconciliation.                       |
-| `INTERNAL_BUG`             | Record a sanitized invariant failure and dead-letter after bounded handling.                     |
-| `UNKNOWN`                  | Fail conservatively and preserve visible operational state.                                      |
+| Category                   | Operational treatment                                                                                 |
+| -------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `VALIDATION`               | No automatic retry; return bounded, merchant-correctable feedback.                                    |
+| `MISSING_MAPPING`          | Block only the affected intent until a valid mapping is selected.                                     |
+| `AMBIGUOUS_MAPPING`        | Require an explicit variant selection because SKU is not unique.                                      |
+| `SHOPIFY_USER_ERROR`       | Treat merchant-correctable validation failures as permanent, sanitize them, and show Needs Attention. |
+| `AUTHENTICATION`           | Retry when offline Admin access is temporarily unavailable; do not expose credentials.                |
+| `MISSING_SCOPE`            | Pause without exhausting attempts; resume only after lifecycle state records the restored scope.      |
+| `SHOP_UNINSTALLED`         | Cancel active local work and prevent further Shopify calls.                                           |
+| `THROTTLED`                | Delay through the per-shop cost/resource gates; never dead-letter solely for throttling.              |
+| `NETWORK_TRANSIENT`        | Retry only when failure is known to be before write dispatch.                                         |
+| `SHOPIFY_SERVER_TRANSIENT` | Retry safe reads; treat inconclusive writes conservatively.                                           |
+| `AMBIGUOUS_WRITE_RESULT`   | Never blind-retry `orderCreate`; perform bounded read-only reconciliation.                            |
+| `INTERNAL_BUG`             | Record a sanitized invariant failure and dead-letter after bounded handling.                          |
+| `UNKNOWN`                  | Fail conservatively and preserve visible operational state.                                           |
 
 ## Queue And Outbox Recovery
 
@@ -78,6 +78,7 @@ Throttling or missing scope:
 
 - The job is delayed instead of busy-waiting.
 - Throttling uses Shopify cost metadata and a per-shop Redis gate shared by order and catalog workers.
+- A development/trial-store `orderCreate` resource-limit response activates a shared five-orders-per-minute gate; affected intents stay in `RETRY_WAIT` and resume automatically.
 - Missing `write_orders` pauses create work without consuming all attempts. `APP_SCOPES_UPDATE` restoration creates fresh outbox work for eligible intents.
 
 Permanent failure:
