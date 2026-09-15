@@ -19,6 +19,7 @@ import { buildOrderCreateInput } from "../app/services/orders/order-create.serve
 import {
   buildOrderSourceIdentifier,
   confirmImportBatch,
+  markOrderIntentSucceeded,
 } from "../app/services/orders/order-state.server";
 import { ShopifyRateGate } from "../app/services/shopify/shopify-rate-gate.server";
 import {
@@ -153,6 +154,46 @@ describeIfDatabase("Phase 5 order pipeline", () => {
       status: "already-succeeded",
     });
     expect(graphql).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps batch counters consistent when many orders finish concurrently", async () => {
+    const fixture = await createReadyImport(prisma, 20);
+    await confirmImportBatch(prisma, {
+      shopId: fixture.shopId,
+      batchId: fixture.batchId,
+      now: new Date("2026-09-11T00:00:00.000Z"),
+    });
+    await prisma.orderIntent.updateMany({
+      where: { id: { in: fixture.orderIntentIds } },
+      data: {
+        status: "PROCESSING",
+        processingStartedAt: new Date("2026-09-11T00:00:01.000Z"),
+      },
+    });
+
+    await Promise.all(
+      fixture.orderIntentIds.map((orderIntentId, index) =>
+        markOrderIntentSucceeded(prisma, {
+          shopId: fixture.shopId,
+          orderIntentId,
+          shopifyOrderGid: `gid://shopify/Order/${1000 + index}`,
+          shopifyOrderName: `#${1000 + index}`,
+          now: new Date("2026-09-11T00:00:02.000Z"),
+        }),
+      ),
+    );
+
+    await expect(
+      prisma.importBatch.findUniqueOrThrow({
+        where: { id: fixture.batchId },
+      }),
+    ).resolves.toMatchObject({
+      status: "COMPLETED",
+      totalOrders: 20,
+      queuedOrders: 0,
+      processingOrders: 0,
+      succeededOrders: 20,
+    });
   });
 
   it("reconciles a stale processing claim after a worker restart instead of blindly creating", async () => {
@@ -618,7 +659,7 @@ async function ambiguousImport(prisma: PrismaClient) {
   return fixture;
 }
 
-async function createReadyImport(prisma: PrismaClient) {
+async function createReadyImport(prisma: PrismaClient, orderCount = 1) {
   const domain = `phase5-${crypto.randomUUID()}.myshopify.com`;
   const shop = await prisma.shop.create({
     data: {
@@ -636,12 +677,23 @@ async function createReadyImport(prisma: PrismaClient) {
       productTitle: "Product one",
     },
   });
+  const rows = Array.from({ length: orderCount }, (_, index) =>
+    [
+      `order-${index + 1}`,
+      "2026-09-10T12:00:00Z",
+      `buyer-${index + 1}@example.com`,
+      "USD",
+      "SKU-1",
+      "1",
+      "10.00",
+    ].join(","),
+  );
   const orders = await parseImportCsv(
     new File(
       [
         [
           "external_order_id,processed_at,email,currency,sku,quantity,unit_price",
-          "order-1,2026-09-10T12:00:00Z,buyer@example.com,USD,SKU-1,1,10.00",
+          ...rows,
         ].join("\n"),
       ],
       "orders.csv",
@@ -656,13 +708,15 @@ async function createReadyImport(prisma: PrismaClient) {
     idempotencyKey: crypto.randomUUID(),
     orders,
   });
-  const intent = await prisma.orderIntent.findFirstOrThrow({
+  const intents = await prisma.orderIntent.findMany({
     where: { shopId: shop.id },
+    orderBy: { externalOrderId: "asc" },
   });
   return {
     shopId: shop.id,
     batchId: result.batch.id,
-    orderIntentId: intent.id,
+    orderIntentId: intents[0].id,
+    orderIntentIds: intents.map((intent) => intent.id),
   };
 }
 

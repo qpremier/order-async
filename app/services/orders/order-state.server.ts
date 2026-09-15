@@ -521,6 +521,7 @@ export async function refreshLinkedBatches(
   const links = await tx.importBatchOrderIntent.findMany({
     where: { orderIntentId },
     select: { importBatchId: true },
+    orderBy: { importBatchId: "asc" },
   });
   for (const link of links) {
     await refreshBatch(tx, link.importBatchId, now);
@@ -533,6 +534,16 @@ async function refreshBatch(
   now: Date,
   overrides: { confirmedAt?: Date } = {},
 ) {
+  // Multiple order workers can finish intents from the same batch at once.
+  // Serialize each batch refresh before reading intent statuses so a later
+  // writer cannot overwrite newer counters with an older snapshot.
+  await tx.$queryRaw<Array<{ id: string }>>`
+    SELECT "id"
+    FROM "ImportBatch"
+    WHERE "id" = ${batchId}
+    FOR UPDATE
+  `;
+
   const [batch, intents] = await Promise.all([
     tx.importBatch.findUniqueOrThrow({ where: { id: batchId } }),
     tx.orderIntent.findMany({
