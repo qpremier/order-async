@@ -1,5 +1,7 @@
 # OrderRelay Implementation Plan
 
+> Historical note: this plan records the original TypeScript implementation. The current application has since been converted to plain JavaScript; use `npm run check` for linting and syntax validation and run the worker directly from `worker/index.js`.
+
 Phase 0 audit completed for the existing Shopify React Router app. This phase is documentation-only: no application behavior, schema, dependency, package-lock, or runtime configuration changes are included.
 
 Phase 1 established the PostgreSQL foundation, environment validation, local Postgres/Redis Compose services, and health/readiness checks.
@@ -113,7 +115,7 @@ Baseline commands run before creating these docs:
 Post-documentation verification should rerun:
 
 - `npm run lint`
-- `npm run typecheck`
+- `npm run check`
 - `npm run build`
 
 Record those final command results in the Phase 0 handoff response.

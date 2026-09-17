@@ -95,7 +95,7 @@ npm run worker:dev
 npm run worker:build
 npm run worker:start
 npm run lint
-npm run typecheck
+npm run check
 npm test
 npm run build
 ```
@@ -187,7 +187,7 @@ npm ci
 npm run prisma:generate
 npm run migrate:deploy
 npm run lint
-npm run typecheck
+npm run check
 npm test
 npm run build
 ```

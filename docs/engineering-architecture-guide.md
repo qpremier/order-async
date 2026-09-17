@@ -36,7 +36,7 @@ This is not a collection of microservices. It is one codebase with two independe
 - `web`: authentication, pages, HTTP actions, CSV parsing, webhook acceptance, and PostgreSQL writes.
 - `worker`: outbox dispatching, BullMQ consumers, catalog synchronization, order creation, reconciliation, and lifecycle cleanup.
 
-Both use the same Prisma schema, PostgreSQL database, and Redis instance. The worker entry point is [`worker/index.ts`](../worker/index.ts), while the Shopify web configuration starts in [`app/shopify.server.js`](../app/shopify.server.js).
+Both use the same Prisma schema, PostgreSQL database, and Redis instance. The worker entry point is [`worker/index.js`](../worker/index.js), while the Shopify web configuration starts in [`app/shopify.server.js`](../app/shopify.server.js).
 
 This separation means a slow Shopify API request does not keep an upload or webhook HTTP request open.
 
@@ -85,9 +85,9 @@ Instead, confirmation performs one PostgreSQL transaction containing:
 - A deterministic `sourceIdentifier`
 - A new `OutboxEvent` of type `order.create`
 
-See [`confirmImportBatch`](../app/services/orders/order-state.server.ts).
+See [`confirmImportBatch`](../app/services/orders/order-state.server.js).
 
-The worker process runs an `OutboxDispatcher` every two seconds by default. It reads unpublished events, converts them to safe BullMQ jobs, publishes them, and only then sets `publishedAt`. See [`dispatcher.server.ts`](../app/services/outbox/dispatcher.server.ts).
+The worker process runs an `OutboxDispatcher` every two seconds by default. It reads unpublished events, converts them to safe BullMQ jobs, publishes them, and only then sets `publishedAt`. See [`dispatcher.server.js`](../app/services/outbox/dispatcher.server.js).
 
 If Redis is unavailable during publication:
 
@@ -102,7 +102,7 @@ One limitation is that there is no outbox claim or `FOR UPDATE SKIP LOCKED`. Mul
 
 ## 4. BullMQ queues and jobs
 
-Three queues are defined in [`queue-names.ts`](../app/queues/queue-names.ts):
+Three queues are defined in [`queue-names.js`](../app/queues/queue-names.js):
 
 | Queue | Responsibility | Default concurrency |
 | --- | --- | ---: |
@@ -110,7 +110,7 @@ Three queues are defined in [`queue-names.ts`](../app/queues/queue-names.ts):
 | `catalog-sync` | Full catalog sync and product refresh | 2 |
 | `maintenance` | Lifecycle webhooks and diagnostics | 1 |
 
-The routing table is in [`jobs.ts`](../app/queues/jobs.ts).
+The routing table is in [`jobs.js`](../app/queues/jobs.js).
 
 Jobs have:
 
@@ -120,7 +120,7 @@ Jobs have:
 - Completed retention of one day or 1,000 jobs
 - Failed retention of seven days or 1,000 jobs
 
-Those defaults are in [`queues.server.ts`](../app/queues/queues.server.ts).
+Those defaults are in [`queues.server.js`](../app/queues/queues.server.js).
 
 Lower priority numbers run first. For example, order creation has priority `1`, reconciliation `2`, replay `3`, catalog refresh `5`, bootstrap `10`, and diagnostics `50`.
 
@@ -132,7 +132,7 @@ An order job therefore contains an `orderIntentId`, not the customer email, ship
 
 ## 5. How workers are made
 
-[`createQueueWorkers`](../worker/queue-workers.ts) constructs three BullMQ `Worker` objects.
+[`createQueueWorkers`](../worker/queue-workers.js) constructs three BullMQ `Worker` objects.
 
 Each worker:
 
@@ -163,7 +163,7 @@ The complete order path is described below.
 
 [`app.imports.new.jsx`](../app/routes/app.imports.new.jsx) authenticates the merchant and parses the CSV synchronously during the HTTP request.
 
-[`parseImportCsv`](../app/services/imports/import-parser.server.ts):
+[`parseImportCsv`](../app/services/imports/import-parser.server.js):
 
 - Enforces byte and row limits
 - Validates headers
@@ -178,7 +178,7 @@ The raw uploaded CSV is not stored. However, parsed customer and order data is s
 
 ### Draft creation
 
-[`createDraftImport`](../app/services/imports/import-domain.server.ts) creates:
+[`createDraftImport`](../app/services/imports/import-domain.server.js) creates:
 
 - One `ImportBatch`
 - One `OrderIntent` per external order
@@ -199,11 +199,11 @@ The order worker conditionally updates:
 QUEUED or due RETRY_WAIT -> PROCESSING
 ```
 
-The update also requires `shopifyOrderGid` to be null. Only the worker whose `updateMany()` count is one owns the order. See [`claimOrderIntentForProcessing`](../app/services/orders/order-state.server.ts).
+The update also requires `shopifyOrderGid` to be null. Only the worker whose `updateMany()` count is one owns the order. See [`claimOrderIntentForProcessing`](../app/services/orders/order-state.server.js).
 
 ### Shopify creation
 
-[`processOrderCreate`](../worker/processors/order.processor.ts) verifies:
+[`processOrderCreate`](../worker/processors/order.processor.js) verifies:
 
 - The order is not already successful
 - No live worker lease exists
@@ -212,7 +212,7 @@ The update also requires `shopifyOrderGid` to be null. Only the worker whose `up
 - The per-store resource gate allows the request
 - The GraphQL cost gate allows the request
 
-It then calls `orderCreate` through [`createShopifyOrder`](../app/services/orders/order-create.server.ts).
+It then calls `orderCreate` through [`createShopifyOrder`](../app/services/orders/order-create.server.js).
 
 The input contains:
 
@@ -259,7 +259,7 @@ A delayed reconciliation job searches Shopify using:
 source_identifier:"orderrelay:<source>:<hash>"
 ```
 
-See [`order-reconcile.server.ts`](../app/services/orders/order-reconcile.server.ts).
+See [`order-reconcile.server.js`](../app/services/orders/order-reconcile.server.js).
 
 Results are handled as follows:
 
@@ -297,7 +297,7 @@ This distinction means `JOB_MAX_ATTEMPTS=5` is not a universal business retry li
 
 ## 10. Shopify throttling
 
-[`ShopifyRateGate`](../app/services/shopify/shopify-rate-gate.server.ts) implements two per-shop Redis gates.
+[`ShopifyRateGate`](../app/services/shopify/shopify-rate-gate.server.js) implements two per-shop Redis gates.
 
 ### GraphQL cost gate
 
@@ -344,7 +344,7 @@ Routes call `authenticate.webhook(request)`, which delegates signature and authe
 
 ### Product webhooks
 
-[`ingestProductWebhook`](../app/services/catalog/product-webhooks.server.ts):
+[`ingestProductWebhook`](../app/services/catalog/product-webhooks.server.js):
 
 1. Extracts the product GID.
 2. Hashes the payload.
@@ -356,7 +356,7 @@ The catalog worker later queries Shopify and updates only that product's variant
 
 ### Lifecycle webhooks
 
-[`ingestAppLifecycleWebhook`](../app/services/webhooks/app-lifecycle.server.ts) immediately commits critical security state.
+[`ingestAppLifecycleWebhook`](../app/services/webhooks/app-lifecycle.server.js) immediately commits critical security state.
 
 Uninstall immediately:
 
@@ -370,7 +370,7 @@ The maintenance worker later cancels unfinished orders, imports, and catalog run
 
 Scope updates immediately update durable scope state. Maintenance then pauses or resumes eligible order work.
 
-Workers also recheck shop status and scope immediately before GraphQL through [`withShopCapabilityGuard`](../app/services/shops/shop-capabilities.server.ts). This reduces the uninstall and scope race, although an already in-flight request cannot be recalled.
+Workers also recheck shop status and scope immediately before GraphQL through [`withShopCapabilityGuard`](../app/services/shops/shop-capabilities.server.js). This reduces the uninstall and scope race, although an already in-flight request cannot be recalled.
 
 ## 12. Catalog cache architecture
 
@@ -385,7 +385,7 @@ A full sync:
 5. Repeats.
 6. Only after complete success marks unseen variants deleted.
 
-See [`runFullCatalogSync`](../app/services/catalog/catalog-sync.server.ts).
+See [`runFullCatalogSync`](../app/services/catalog/catalog-sync.server.js).
 
 This means a failed sync:
 
@@ -422,11 +422,11 @@ It uses:
 - No polling when the tab is hidden
 - Stopping at terminal status
 
-See [`import-status.server.ts`](../app/services/imports/import-status.server.ts).
+See [`import-status.server.js`](../app/services/imports/import-status.server.js).
 
 Pagination uses opaque keyset cursors based on `(createdAt, id)`, avoiding expensive offset pagination.
 
-Logs are structured JSON with correlation, shop, batch, intent, outbox, and job IDs. Known sensitive fields and sensitive-looking strings are redacted in [`logger.server.ts`](../app/services/logging/logger.server.ts).
+Logs are structured JSON with correlation, shop, batch, intent, outbox, and job IDs. Known sensitive fields and sensitive-looking strings are redacted in [`logger.server.js`](../app/services/logging/logger.server.js).
 
 ## 15. Important limitations
 
@@ -451,19 +451,18 @@ Read the project in this order:
 1. [`README.md`](../README.md)
 2. [`docs/architecture.md`](architecture.md)
 3. [`prisma/schema.prisma`](../prisma/schema.prisma)
-4. [`app/queues/jobs.ts`](../app/queues/jobs.ts)
-5. [`app/services/outbox/dispatcher.server.ts`](../app/services/outbox/dispatcher.server.ts)
-6. [`worker/index.ts`](../worker/index.ts)
-7. [`worker/processors/order.processor.ts`](../worker/processors/order.processor.ts)
-8. [`app/services/orders/order-state.server.ts`](../app/services/orders/order-state.server.ts)
-9. [`app/services/shopify/shopify-rate-gate.server.ts`](../app/services/shopify/shopify-rate-gate.server.ts)
+4. [`app/queues/jobs.js`](../app/queues/jobs.js)
+5. [`app/services/outbox/dispatcher.server.js`](../app/services/outbox/dispatcher.server.js)
+6. [`worker/index.js`](../worker/index.js)
+7. [`worker/processors/order.processor.js`](../worker/processors/order.processor.js)
+8. [`app/services/orders/order-state.server.js`](../app/services/orders/order-state.server.js)
+9. [`app/services/shopify/shopify-rate-gate.server.js`](../app/services/shopify/shopify-rate-gate.server.js)
 10. [`docs/interview.md`](interview.md), which contains hundreds of focused engineering questions and answers
 
 ## Verification notes
 
 At the time this guide was written:
 
-- TypeScript checking passed.
+- JavaScript linting and syntax checks passed.
 - The complete serial test run passed all 68 tests.
 - A default parallel run initially produced a shared-test-database deadlock. The affected test passed independently, and the complete suite passed when run serially. This indicates test isolation interference rather than a reproducible order-pipeline failure.
-

@@ -75,7 +75,7 @@ It says that it aims for effectively-once behavior under at-least-once delivery.
 
 ### 11. What are the main runtime components?
 
-There is a React Router web process, a separate TypeScript worker process, PostgreSQL, Redis, BullMQ queues, Prisma, and the Shopify Admin GraphQL API.
+There is a React Router web process, a separate JavaScript worker process, PostgreSQL, Redis, BullMQ queues, Prisma, and the Shopify Admin GraphQL API.
 
 ### 12. What is the responsibility of the web process?
 
@@ -105,9 +105,9 @@ BullMQ provides delayed work, priorities, retry support, concurrency, and Redis-
 
 Prisma provides the database client, transactions, generated types, migrations, and the session-storage adapter required by the Shopify template.
 
-### 19. Why is TypeScript used mainly in backend modules?
+### 19. Why is plain JavaScript used throughout the app?
 
-The project kept the existing JavaScript and JSX template files while implementing substantial domain and worker logic in TypeScript. This avoids an unrelated full rewrite.
+The project uses JavaScript and JSX consistently across the web, domain, and worker modules. Runtime contracts that affect behavior are enforced with Zod and domain validation rather than compile-time-only types.
 
 ### 20. Why is React Router used on both the client and server?
 
@@ -1105,7 +1105,7 @@ It installs locked dependencies, generates Prisma, builds the web and worker art
 
 ### 262. How is the worker started from the same image?
 
-Compose overrides the command with npm run worker:start. The TypeScript worker is compiled into build/worker.
+Compose overrides the command with `npm run worker:start`, which runs the JavaScript worker directly from `worker/index.js`.
 
 ### 263. How does graceful shutdown work?
 

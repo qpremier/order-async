@@ -64,11 +64,8 @@ jobs:
       - name: Apply database migrations
         run: npm run migrate:deploy
 
-      - name: Lint
-        run: npm run lint
-
-      - name: Type-check
-        run: npm run typecheck
+      - name: Lint and check JavaScript
+        run: npm run check
 
       - name: Test
         run: npm test

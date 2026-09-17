@@ -68,7 +68,7 @@ Inspect these files before making architectural decisions:
 - existing webhook route files
 - Dockerfile
 - .env.example or equivalent
-- eslint and TypeScript configuration files
+- ESLint and JavaScript configuration files
 - README files
 
 Do not assume the exact directory structure beyond what actually exists.
@@ -112,8 +112,8 @@ Session storage:
 - @shopify/shopify-app-session-storage-prisma
 
 Language:
-- Mostly JavaScript and JSX
-- TypeScript tooling is already enabled
+- JavaScript and JSX
+- JavaScript linting and syntax checks are enabled
 
 Package manager:
 - npm
@@ -142,9 +142,9 @@ Application:
 
 Backend:
 - React Router server loaders/actions/resource routes
-- TypeScript for all substantial new backend modules
-- Existing JavaScript files may remain JavaScript
-- Do not perform a large unrelated JavaScript-to-TypeScript rewrite
+- Plain JavaScript for all substantial new backend modules
+- Keep existing JavaScript files in JavaScript
+- Do not introduce TypeScript-only syntax or tooling
 
 Database:
 - PostgreSQL for development, testing, and production
@@ -1230,46 +1230,46 @@ app/
   routes/
   services/
     imports/
-      import-parser.server.ts
-      import-validation.server.ts
-      import-state.server.ts
-      payload-hash.server.ts
+      import-parser.server.js
+      import-validation.server.js
+      import-state.server.js
+      payload-hash.server.js
     catalog/
-      catalog-sync.server.ts
-      catalog-cache.server.ts
-      sku-mapping.server.ts
+      catalog-sync.server.js
+      catalog-cache.server.js
+      sku-mapping.server.js
     orders/
-      order-create.server.ts
-      order-reconcile.server.ts
-      order-state.server.ts
+      order-create.server.js
+      order-reconcile.server.js
+      order-state.server.js
     shopify/
-      admin-client.server.ts
-      graphql-cost.server.ts
-      shop-capabilities.server.ts
+      admin-client.server.js
+      graphql-cost.server.js
+      shop-capabilities.server.js
     outbox/
-      outbox.server.ts
+      outbox.server.js
     pagination/
-      cursor.server.ts
+      cursor.server.js
     logging/
-      logger.server.ts
+      logger.server.js
     security/
-      environment.server.ts
+      environment.server.js
   queues/
-    connection.server.ts
-    queue-names.ts
-    jobs.ts
+    connection.server.js
+    queue-names.js
+    jobs.js
 
 worker/
-  index.ts
+  index.js
   processors/
-    order-create.processor.ts
-    order-reconcile.processor.ts
-    catalog-sync.processor.ts
-    webhook.processor.ts
+    order-create.processor.js
+    order-reconcile.processor.js
+    catalog-sync.processor.js
+    webhook.processor.js
   rate-limit/
-    shopify-rate-gate.ts
+    shopify-rate-gate.js
   outbox/
-    dispatcher.ts
+    dispatcher.js
 
 prisma/
   schema.prisma
@@ -1324,7 +1324,7 @@ Complete one phase at a time. At the end of each phase:
 
 1. Run formatting.
 2. Run linting.
-3. Run TypeScript checking.
+3. Run JavaScript linting and syntax checks.
 4. Run relevant tests.
 5. Run the production build.
 6. Report all commands and results.
@@ -1349,7 +1349,7 @@ Tasks:
 - Record existing failures separately from new failures.
 - Find template demo code that will eventually be removed.
 - Identify Docker entry points.
-- Identify whether existing TypeScript configuration can compile worker code.
+- Identify how the existing JavaScript worker is validated and started.
 - Identify migration risks when changing SQLite to PostgreSQL.
 
 Create:
@@ -1621,7 +1621,7 @@ Follow these rules:
 - Keep changes focused.
 - Do not reformat unrelated files.
 - Prefer small cohesive modules.
-- Use TypeScript for new services and worker code.
+- Use plain JavaScript for new services and worker code.
 - Avoid any unless there is a documented interoperability reason.
 - Avoid enormous route modules.
 - Keep Shopify GraphQL operations in dedicated modules.

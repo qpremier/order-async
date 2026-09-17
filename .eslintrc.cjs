@@ -27,7 +27,7 @@ module.exports = {
   overrides: [
     // React
     {
-      files: ["**/*.{js,jsx,ts,tsx}"],
+      files: ["**/*.{js,jsx}"],
       plugins: ["react", "jsx-a11y"],
       extends: [
         "plugin:react/recommended",
@@ -44,51 +44,25 @@ module.exports = {
           { name: "Link", linkAttribute: "to" },
           { name: "NavLink", linkAttribute: "to" },
         ],
-        "import/resolver": {
-          typescript: {},
-        },
       },
       rules: {
         "react/no-unknown-property": ["error", { ignore: ["variant"] }],
       },
     },
 
-    // Typescript
-    {
-      files: ["**/*.{ts,tsx}"],
-      plugins: ["@typescript-eslint", "import"],
-      parser: "@typescript-eslint/parser",
-      settings: {
-        "import/internal-regex": "^~/",
-        "import/resolver": {
-          node: {
-            extensions: [".ts", ".tsx"],
-          },
-          typescript: {
-            alwaysTryTypes: true,
-          },
-        },
-      },
-      extends: [
-        "plugin:@typescript-eslint/recommended",
-        "plugin:import/recommended",
-        "plugin:import/typescript",
-      ],
-    },
-
     // Node
     {
       files: [
         ".eslintrc.cjs",
-        "vite.config.{js,ts}",
-        "vitest.config.{js,ts}",
-        "react-router.config.{js,ts}",
-        ".graphqlrc.{js,ts}",
-        "shopify.server.{js,ts}",
-        "**/*.server.{js,ts}",
-        "**/*.test.{js,jsx,ts,tsx}",
-        "tests/**/*.{js,ts}",
-        "worker/**/*.ts",
+        "vite.config.js",
+        "vitest.config.js",
+        "react-router.config.js",
+        "shopify.server.js",
+        "**/*.server.js",
+        "**/*.test.{js,jsx}",
+        "tests/**/*.js",
+        "worker/**/*.js",
+        "scripts/**/*.mjs",
       ],
       env: {
         node: true,
